@@ -43,6 +43,9 @@ class _CallExtractor(ast.NodeVisitor):
     def visit_If(self, node: ast.If) -> None:
         condition = self._unparse_condition(node.test)
 
+        # Extract calls from the condition expression (e.g., "if validate(data):")
+        self.visit(node.test)
+
         if_branch = ConditionalBranch(condition=condition, line=node.lineno)
         self._current_branch = if_branch
         for stmt in node.body:
