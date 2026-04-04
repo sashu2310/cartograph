@@ -1,15 +1,73 @@
 """CARTOGRAPH CLI — entry point for code flow exploration."""
 
 import json
+from pathlib import Path
 
 import click
 from rich.console import Console
 from rich.table import Table
 
 from cartograph.config import CartographConfig
-from cartograph.parser.ast_parser import parse_directory
+from cartograph.parser.registry import FrameworkRegistry, LanguageRegistry
+from cartograph.parser.languages.python import PythonAdapter
+from cartograph.parser.languages.python.frameworks import (
+    CeleryDetector,
+    DjangoNinjaDetector,
+    DjangoORMDetector,
+    DjangoSignalDetector,
+)
+from cartograph.graph.models import ParsedModule, ProjectIndex
 
 console = Console()
+
+
+def _build_registries():
+    """Build language and framework registries with all available plugins."""
+    lang_registry = LanguageRegistry()
+    lang_registry.register(PythonAdapter())
+
+    fw_registry = FrameworkRegistry()
+    fw_registry.register("python", CeleryDetector())
+    fw_registry.register("python", DjangoNinjaDetector())
+    fw_registry.register("python", DjangoORMDetector())
+    fw_registry.register("python", DjangoSignalDetector())
+
+    return lang_registry, fw_registry
+
+
+def _parse_project(config: CartographConfig) -> ProjectIndex:
+    """Parse a project using the registry-based pipeline."""
+    lang_registry, fw_registry = _build_registries()
+    index = ProjectIndex(root_path=config.root_path)
+    root = Path(config.root_path)
+
+    for source_file in root.rglob("*"):
+        if not source_file.is_file():
+            continue
+        if any(excluded in source_file.parts for excluded in config.exclude_dirs):
+            continue
+
+        adapter = lang_registry.get_adapter(str(source_file))
+        if not adapter:
+            continue
+
+        relative = source_file.relative_to(root)
+        module_path = str(relative.with_suffix("")).replace("/", ".")
+
+        module = adapter.parse_file(str(source_file), module_path)
+        if not module:
+            continue
+
+        # Run framework detectors
+        entry_points = fw_registry.detect_all_entry_points(module, adapter.language_id)
+        index.entry_points.extend(entry_points)
+
+        # Annotate calls with async boundaries and ORM operations
+        fw_registry.annotate_module(module, adapter.language_id)
+
+        index.modules[module.module_path] = module
+
+    return index
 
 
 @click.group()
@@ -24,11 +82,11 @@ def main():
 def init(path: str, include_tests: bool):
     """Scan and parse a codebase."""
     config = CartographConfig(root_path=path, include_tests=include_tests)
-
     console.print(f"\n[bold blue]CARTOGRAPH[/] scanning [green]{path}[/]\n")
 
-    modules = parse_directory(config.root_path, config.exclude_dirs)
+    index = _parse_project(config)
 
+    # Module table
     table = Table(title="Parsed Modules")
     table.add_column("Module", style="cyan")
     table.add_column("Functions", justify="right", style="green")
@@ -38,39 +96,31 @@ def init(path: str, include_tests: bool):
     total_functions = 0
     total_classes = 0
 
-    for module in sorted(modules, key=lambda m: m.module_path):
-        func_count = len([f for f in module.functions if f.type != "class"])
-        class_count = len(module.classes)
-        import_count = len(module.imports)
+    for mod in sorted(index.modules.values(), key=lambda m: m.module_path):
+        func_count = len(mod.functions)
+        class_count = len(mod.classes)
         total_functions += func_count
         total_classes += class_count
-
-        table.add_row(
-            module.module_path,
-            str(func_count),
-            str(class_count),
-            str(import_count),
-        )
+        table.add_row(mod.module_path, str(func_count), str(class_count), str(len(mod.imports)))
 
     console.print(table)
     console.print(
-        f"\n[bold]Total:[/] {len(modules)} modules, "
+        f"\n[bold]Total:[/] {index.total_modules} modules, "
         f"{total_functions} functions, {total_classes} classes\n"
     )
 
-    entry_points = _find_entry_points(modules)
-    if entry_points:
+    # Entry points table
+    if index.entry_points:
         ep_table = Table(title="Discovered Entry Points")
         ep_table.add_column("Type", style="magenta")
-        ep_table.add_column("Name", style="cyan")
-        ep_table.add_column("File", style="dim")
-        ep_table.add_column("Line", justify="right")
+        ep_table.add_column("Trigger", style="cyan")
+        ep_table.add_column("Description", style="dim", max_width=40)
 
-        for ep in entry_points:
-            ep_table.add_row(ep["type"], ep["name"], ep["file"], str(ep["line"]))
+        for ep in index.entry_points:
+            ep_table.add_row(ep.type.value, ep.trigger, ep.description or "")
 
         console.print(ep_table)
-        console.print(f"\n[bold]Entry points:[/] {len(entry_points)}\n")
+        console.print(f"\n[bold]Entry points:[/] {len(index.entry_points)}\n")
 
 
 @main.command()
@@ -81,15 +131,13 @@ def init(path: str, include_tests: bool):
 def trace(path: str, function_name: str, output: str, depth: int):
     """Trace the code flow from a specific function."""
     config = CartographConfig(root_path=path)
+    console.print(f"\n[bold blue]CARTOGRAPH[/] tracing [green]{function_name}[/]\n")
 
-    console.print(
-        f"\n[bold blue]CARTOGRAPH[/] tracing [green]{function_name}[/]\n"
-    )
+    index = _parse_project(config)
 
-    modules = parse_directory(config.root_path, config.exclude_dirs)
-
+    # Find the target function
     target = None
-    for module in modules:
+    for module in index.modules.values():
         for func in module.functions:
             if func.qualified_name.endswith(function_name) or func.name == function_name:
                 target = func
@@ -106,60 +154,18 @@ def trace(path: str, function_name: str, output: str, depth: int):
     console.print(f"[dim]Decorators:[/] {', '.join(target.decorators) or 'none'}")
     console.print(f"[dim]Direct calls:[/] {len(target.calls)}")
     console.print(f"[dim]Branches:[/] {len(target.branches)}")
-
     console.print(f"\n[bold]Call tree:[/]\n")
-    _print_call_tree(target, modules, depth=depth, prefix="")
+
+    _print_call_tree(target, index, depth=depth, prefix="")
 
     if output:
-        data = _serialize_trace(target, modules, depth)
+        data = _serialize_trace(target)
         with open(output, "w") as f:
             json.dump(data, f, indent=2)
         console.print(f"\n[dim]Output written to {output}[/]")
 
 
-def _find_entry_points(modules) -> list[dict]:
-    """Find all entry points (API routes, Celery tasks, beat schedules)."""
-    entry_points = []
-
-    for module in modules:
-        for func in module.functions:
-            for dec in func.decorators:
-                if "api_controller" in dec:
-                    entry_points.append({
-                        "type": "API Controller",
-                        "name": func.name,
-                        "file": func.file_path,
-                        "line": func.line_start,
-                    })
-
-                if "route.get" in dec or "route.post" in dec or "route.patch" in dec or "route.delete" in dec:
-                    entry_points.append({
-                        "type": f"API Route",
-                        "name": func.name,
-                        "file": func.file_path,
-                        "line": func.line_start,
-                    })
-
-                if "celery_app.task" in dec or "shared_task" in dec:
-                    entry_points.append({
-                        "type": "Celery Task",
-                        "name": func.name,
-                        "file": func.file_path,
-                        "line": func.line_start,
-                    })
-
-                if "receiver" in dec:
-                    entry_points.append({
-                        "type": "Signal Handler",
-                        "name": func.name,
-                        "file": func.file_path,
-                        "line": func.line_start,
-                    })
-
-    return entry_points
-
-
-def _print_call_tree(func, modules, depth=10, prefix="", visited=None):
+def _print_call_tree(func, index: ProjectIndex, depth=10, prefix="", visited=None):
     """Recursively print the call tree for a function."""
     if visited is None:
         visited = set()
@@ -179,9 +185,9 @@ def _print_call_tree(func, modules, depth=10, prefix="", visited=None):
         receiver_prefix = f"{call.receiver}." if call.receiver else ""
         console.print(f"{prefix}{icon} {receiver_prefix}{call.name}()")
 
-        resolved = _resolve_call(call, func, modules)
+        resolved = _resolve_call(call, index)
         if resolved:
-            _print_call_tree(resolved, modules, depth - 1, prefix + "  │ ", visited.copy())
+            _print_call_tree(resolved, index, depth - 1, prefix + "  │ ", visited.copy())
 
     for branch in func.branches:
         label = "else" if branch.is_else else f"if {branch.condition or '...'}"
@@ -192,9 +198,9 @@ def _print_call_tree(func, modules, depth=10, prefix="", visited=None):
             console.print(f"{prefix}│  {icon} {receiver_prefix}{call.name}()")
 
 
-def _resolve_call(call, caller_func, modules):
-    """Try to resolve a call to a parsed function."""
-    for module in modules:
+def _resolve_call(call, index: ProjectIndex):
+    """Try to resolve a call to a parsed function in the project index."""
+    for module in index.modules.values():
         for func in module.functions:
             if func.name == call.name or func.name.endswith(f".{call.name}"):
                 return func
@@ -203,8 +209,8 @@ def _resolve_call(call, caller_func, modules):
     return None
 
 
-def _serialize_trace(func, modules, depth) -> dict:
-    """Serialize a trace to a JSON-compatible dict."""
+def _serialize_trace(func) -> dict:
+    """Serialize a trace to JSON."""
     return {
         "entry": {
             "name": func.qualified_name,
@@ -228,10 +234,7 @@ def _serialize_trace(func, modules, depth) -> dict:
                 "condition": b.condition,
                 "line": b.line,
                 "is_else": b.is_else,
-                "calls": [
-                    {"name": c.name, "receiver": c.receiver, "line": c.line}
-                    for c in b.calls
-                ],
+                "calls": [{"name": c.name, "receiver": c.receiver} for c in b.calls],
             }
             for b in func.branches
         ],

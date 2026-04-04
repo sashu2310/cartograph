@@ -1,4 +1,13 @@
-"""Core AST parser — extracts functions, calls, decorators, branches from Python files."""
+"""Python language adapter — uses stdlib ast module.
+
+This adapter knows Python syntax (def, class, import, decorators, if/else)
+but knows NOTHING about frameworks (Django, Celery, Flask). Framework-specific
+pattern detection lives in the frameworks/ subdirectory.
+
+Migration path: when we need incremental parsing or error tolerance,
+swap ast module for Tree-sitter internally. The LanguageAdapter protocol
+and all consumers remain unchanged.
+"""
 
 import ast
 import hashlib
@@ -6,7 +15,6 @@ from pathlib import Path
 from typing import Optional
 
 from cartograph.graph.models import (
-    AsyncBoundaryType,
     ConditionalBranch,
     FunctionCall,
     NodeType,
@@ -16,27 +24,8 @@ from cartograph.graph.models import (
 )
 
 
-ASYNC_DISPATCH_METHODS = {
-    "delay": AsyncBoundaryType.CELERY_DELAY,
-    "apply_async": AsyncBoundaryType.CELERY_APPLY_ASYNC,
-}
-
-CELERY_ORCHESTRATION = {
-    "chain": AsyncBoundaryType.CELERY_CHAIN,
-    "chord": AsyncBoundaryType.CELERY_CHORD,
-    "group": AsyncBoundaryType.CELERY_GROUP,
-}
-
-ORM_READ_METHODS = {"filter", "get", "all", "values", "values_list", "first", "last",
-                     "exists", "count", "aggregate", "annotate", "select_related",
-                     "prefetch_related", "order_by", "distinct", "exclude"}
-
-ORM_WRITE_METHODS = {"create", "save", "bulk_create", "bulk_update", "update",
-                      "delete", "get_or_create", "update_or_create"}
-
-
-class FunctionCallExtractor(ast.NodeVisitor):
-    """Extracts all function/method calls from a function body."""
+class _CallExtractor(ast.NodeVisitor):
+    """Extracts function/method calls and conditional branches from a function body."""
 
     def __init__(self):
         self.calls: list[FunctionCall] = []
@@ -53,12 +42,9 @@ class FunctionCallExtractor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_If(self, node: ast.If) -> None:
-        condition = self._get_source_segment(node.test)
+        condition = self._unparse_condition(node.test)
 
-        if_branch = ConditionalBranch(
-            condition=condition,
-            line=node.lineno,
-        )
+        if_branch = ConditionalBranch(condition=condition, line=node.lineno)
         self._current_branch = if_branch
         for stmt in node.body:
             self.visit(stmt)
@@ -79,63 +65,48 @@ class FunctionCallExtractor(ast.NodeVisitor):
 
     def _extract_call(self, node: ast.Call) -> Optional[FunctionCall]:
         if isinstance(node.func, ast.Name):
-            name = node.func.id
-            if name in CELERY_ORCHESTRATION:
-                return FunctionCall(
-                    name=name,
-                    line=node.lineno,
-                    is_async_dispatch=True,
-                    async_type=CELERY_ORCHESTRATION[name],
-                    args_count=len(node.args),
-                )
             return FunctionCall(
-                name=name,
+                name=node.func.id,
                 line=node.lineno,
                 args_count=len(node.args),
             )
 
         elif isinstance(node.func, ast.Attribute):
             method_name = node.func.attr
-            receiver = self._get_receiver_name(node.func.value)
-
-            is_async = method_name in ASYNC_DISPATCH_METHODS
-            async_type = ASYNC_DISPATCH_METHODS.get(method_name)
-
-            is_s_call = method_name == "s" or method_name == "si"
+            receiver = self._get_receiver(node.func.value)
 
             return FunctionCall(
                 name=method_name,
                 line=node.lineno,
                 is_method_call=True,
                 receiver=receiver,
-                is_async_dispatch=is_async or is_s_call,
-                async_type=async_type,
                 args_count=len(node.args),
             )
 
         return None
 
-    def _get_receiver_name(self, node: ast.expr) -> Optional[str]:
+    def _get_receiver(self, node: ast.expr) -> Optional[str]:
         if isinstance(node, ast.Name):
             return node.id
         elif isinstance(node, ast.Attribute):
-            parent = self._get_receiver_name(node.value)
-            if parent:
-                return f"{parent}.{node.attr}"
-            return node.attr
+            parent = self._get_receiver(node.value)
+            return f"{parent}.{node.attr}" if parent else node.attr
         elif isinstance(node, ast.Call):
-            return self._get_receiver_name(node.func)
+            return self._get_receiver(node.func)
         return None
 
-    def _get_source_segment(self, node: ast.expr) -> Optional[str]:
+    def _unparse_condition(self, node: ast.expr) -> Optional[str]:
         try:
-            return ast.dump(node)
+            return ast.unparse(node)
         except Exception:
-            return None
+            try:
+                return ast.dump(node)
+            except Exception:
+                return None
 
 
-class ModuleParser(ast.NodeVisitor):
-    """Parses a Python module and extracts all relevant information."""
+class _ModuleVisitor(ast.NodeVisitor):
+    """Visits a Python module AST and extracts structured data."""
 
     def __init__(self, file_path: str, module_path: str):
         self.file_path = file_path
@@ -144,23 +115,6 @@ class ModuleParser(ast.NodeVisitor):
         self.classes: list[str] = []
         self.imports: list[ParsedImport] = []
         self._current_class: Optional[str] = None
-        self._source_lines: list[str] = []
-
-    def parse(self, source: str) -> ParsedModule:
-        self._source_lines = source.splitlines()
-        tree = ast.parse(source, filename=self.file_path)
-        self.visit(tree)
-
-        file_hash = hashlib.md5(source.encode()).hexdigest()
-
-        return ParsedModule(
-            file_path=self.file_path,
-            module_path=self.module_path,
-            functions=self.functions,
-            classes=self.classes,
-            imports=self.imports,
-            file_hash=file_hash,
-        )
 
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
@@ -188,7 +142,7 @@ class ModuleParser(ast.NodeVisitor):
         decorators = self._extract_decorators(node)
         decorator_details = self._extract_decorator_details(node)
 
-        class_func = ParsedFunction(
+        self.functions.append(ParsedFunction(
             name=node.name,
             qualified_name=f"{self.module_path}.{node.name}",
             file_path=self.file_path,
@@ -199,8 +153,7 @@ class ModuleParser(ast.NodeVisitor):
             decorators=decorators,
             decorator_details=decorator_details,
             module_path=self.module_path,
-        )
-        self.functions.append(class_func)
+        ))
 
         self.generic_visit(node)
         self._current_class = None
@@ -224,11 +177,11 @@ class ModuleParser(ast.NodeVisitor):
             qualified_name = f"{self.module_path}.{node.name}"
             node_type = NodeType.FUNCTION
 
-        call_extractor = FunctionCallExtractor()
+        extractor = _CallExtractor()
         for stmt in node.body:
-            call_extractor.visit(stmt)
+            extractor.visit(stmt)
 
-        func = ParsedFunction(
+        self.functions.append(ParsedFunction(
             name=name,
             qualified_name=qualified_name,
             file_path=self.file_path,
@@ -238,12 +191,11 @@ class ModuleParser(ast.NodeVisitor):
             docstring=ast.get_docstring(node),
             decorators=decorators,
             decorator_details=decorator_details,
-            calls=call_extractor.calls,
-            branches=call_extractor.branches,
+            calls=extractor.calls,
+            branches=extractor.branches,
             class_name=self._current_class,
             module_path=self.module_path,
-        )
-        self.functions.append(func)
+        ))
 
     def _extract_decorators(self, node) -> list[str]:
         decorators = []
@@ -251,89 +203,118 @@ class ModuleParser(ast.NodeVisitor):
             if isinstance(dec, ast.Name):
                 decorators.append(dec.id)
             elif isinstance(dec, ast.Attribute):
-                decorators.append(self._get_attribute_name(dec))
+                decorators.append(self._attr_name(dec))
             elif isinstance(dec, ast.Call):
                 if isinstance(dec.func, ast.Name):
                     decorators.append(dec.func.id)
                 elif isinstance(dec.func, ast.Attribute):
-                    decorators.append(self._get_attribute_name(dec.func))
+                    decorators.append(self._attr_name(dec.func))
         return decorators
 
     def _extract_decorator_details(self, node) -> list[dict]:
         details = []
         for dec in node.decorator_list:
-            detail = {"raw": ast.dump(dec)}
+            detail: dict = {}
 
             if isinstance(dec, ast.Call):
                 if isinstance(dec.func, ast.Name):
                     detail["name"] = dec.func.id
                 elif isinstance(dec.func, ast.Attribute):
-                    detail["name"] = self._get_attribute_name(dec.func)
-
-                detail["args"] = []
-                for arg in dec.args:
-                    if isinstance(arg, ast.Constant):
-                        detail["args"].append(arg.value)
-
-                detail["kwargs"] = {}
-                for kw in dec.keywords:
-                    if kw.arg and isinstance(kw.value, ast.Constant):
-                        detail["kwargs"][kw.arg] = kw.value.value
-
+                    detail["name"] = self._attr_name(dec.func)
+                detail["args"] = [
+                    arg.value for arg in dec.args if isinstance(arg, ast.Constant)
+                ]
+                detail["kwargs"] = {
+                    kw.arg: kw.value.value
+                    for kw in dec.keywords
+                    if kw.arg and isinstance(kw.value, ast.Constant)
+                }
             elif isinstance(dec, ast.Name):
                 detail["name"] = dec.id
             elif isinstance(dec, ast.Attribute):
-                detail["name"] = self._get_attribute_name(dec)
+                detail["name"] = self._attr_name(dec)
 
-            details.append(detail)
+            if detail:
+                details.append(detail)
         return details
 
-    def _get_attribute_name(self, node: ast.Attribute) -> str:
+    def _attr_name(self, node: ast.Attribute) -> str:
         if isinstance(node.value, ast.Name):
             return f"{node.value.id}.{node.attr}"
         elif isinstance(node.value, ast.Attribute):
-            return f"{self._get_attribute_name(node.value)}.{node.attr}"
+            return f"{self._attr_name(node.value)}.{node.attr}"
         return node.attr
 
 
-def parse_file(file_path: str, module_path: str) -> Optional[ParsedModule]:
-    """Parse a single Python file and return structured data."""
-    path = Path(file_path)
-    if not path.exists() or not path.suffix == ".py":
+class PythonAdapter:
+    """Python language adapter using stdlib ast module.
+
+    Implements the LanguageAdapter protocol. Extracts functions, classes,
+    imports, calls, decorators, and conditional branches from Python files.
+    Framework-specific semantics (Celery tasks, Django routes) are NOT
+    handled here — those are in frameworks/*.py detectors.
+    """
+
+    language_id = "python"
+    file_extensions = {".py"}
+
+    def parse_file(self, file_path: str, module_path: str) -> Optional[ParsedModule]:
+        path = Path(file_path)
+        if not path.exists() or path.suffix != ".py":
+            return None
+
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            return None
+
+        try:
+            visitor = _ModuleVisitor(file_path=str(path), module_path=module_path)
+            tree = ast.parse(source, filename=file_path)
+            visitor.visit(tree)
+
+            return ParsedModule(
+                file_path=str(path),
+                module_path=module_path,
+                functions=visitor.functions,
+                classes=visitor.classes,
+                imports=visitor.imports,
+                file_hash=hashlib.md5(source.encode()).hexdigest(),
+            )
+        except SyntaxError:
+            return None
+
+    def resolve_import(
+        self, imp: ParsedImport, source_file: str, project_root: str
+    ) -> Optional[str]:
+        root = Path(project_root)
+
+        if imp.is_relative:
+            source_dir = Path(source_file).parent
+            levels_up = imp.level - 1
+            base = source_dir
+            for _ in range(levels_up):
+                base = base.parent
+
+            if imp.module:
+                target = base / imp.module.replace(".", "/")
+            else:
+                target = base
+        else:
+            target = root / imp.module.replace(".", "/")
+
+        # Check: package/module.py
+        module_file = target.with_suffix(".py")
+        if module_file.exists():
+            return str(module_file)
+
+        # Check: package/__init__.py (it's a package, look for name inside)
+        init_file = target / "__init__.py"
+        if init_file.exists():
+            # The imported name might be in __init__.py or a submodule
+            submodule = target / f"{imp.name}.py"
+            if submodule.exists():
+                return str(submodule)
+            return str(init_file)
+
         return None
-
-    try:
-        source = path.read_text(encoding="utf-8")
-        parser = ModuleParser(file_path=str(path), module_path=module_path)
-        return parser.parse(source)
-    except SyntaxError:
-        return None
-
-
-def parse_directory(
-    root_path: str,
-    exclude_dirs: Optional[set[str]] = None,
-) -> list[ParsedModule]:
-    """Parse all Python files in a directory tree."""
-    if exclude_dirs is None:
-        exclude_dirs = {
-            "__pycache__", ".git", ".venv", "venv", "node_modules",
-            ".eggs", "dist", "build", ".tox", ".mypy_cache",
-            "migrations", ".claude",
-        }
-
-    root = Path(root_path)
-    modules = []
-
-    for py_file in root.rglob("*.py"):
-        if any(excluded in py_file.parts for excluded in exclude_dirs):
-            continue
-
-        relative = py_file.relative_to(root)
-        module_path = str(relative.with_suffix("")).replace("/", ".")
-
-        parsed = parse_file(str(py_file), module_path)
-        if parsed:
-            modules.append(parsed)
-
-    return modules
