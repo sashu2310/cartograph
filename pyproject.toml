@@ -1,0 +1,29 @@
+[tool.poetry]
+name = "cartograph"
+version = "0.1.0"
+description = "AI-powered code flow explorer — don't read the code, read the story"
+authors = ["Sandeep Kesarwani <kesarsandeep23@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+click = "^8.0"
+rich = "^13.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+black = "^24.0"
+
+[tool.poetry.scripts]
+cartograph = "cartograph.cli:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
