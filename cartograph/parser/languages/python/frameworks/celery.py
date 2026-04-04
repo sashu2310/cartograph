@@ -4,8 +4,6 @@ Detects: @celery_app.task, @shared_task, .delay(), .apply_async(),
 chain(), chord(), group(), .s(), .si()
 """
 
-from typing import Optional
-
 from cartograph.graph.models import (
     AsyncBoundaryType,
     EntryPoint,
@@ -13,7 +11,6 @@ from cartograph.graph.models import (
     FunctionCall,
     ParsedModule,
 )
-
 
 TASK_DECORATORS = {"celery_app.task", "shared_task", "app.task"}
 
@@ -44,16 +41,18 @@ class CeleryDetector:
                     if queue:
                         trigger += f" (queue={queue})"
 
-                    entries.append(EntryPoint(
-                        node_id=func.qualified_name,
-                        type=EntryPointType.CELERY_TASK,
-                        trigger=trigger,
-                        description=func.docstring,
-                    ))
+                    entries.append(
+                        EntryPoint(
+                            node_id=func.qualified_name,
+                            type=EntryPointType.CELERY_TASK,
+                            trigger=trigger,
+                            description=func.docstring,
+                        )
+                    )
                     break
         return entries
 
-    def detect_async_boundary(self, call: FunctionCall) -> Optional[AsyncBoundaryType]:
+    def detect_async_boundary(self, call: FunctionCall) -> AsyncBoundaryType | None:
         if not call.is_method_call:
             return ORCHESTRATION_CALLS.get(call.name)
 
@@ -65,10 +64,10 @@ class CeleryDetector:
 
         return None
 
-    def annotate_call(self, call: FunctionCall) -> Optional[dict]:
+    def annotate_call(self, call: FunctionCall) -> dict | None:
         return None
 
-    def _extract_queue(self, decorator_details: list[dict]) -> Optional[str]:
+    def _extract_queue(self, decorator_details: list[dict]) -> str | None:
         for detail in decorator_details:
             kwargs = detail.get("kwargs", {})
             if "queue" in kwargs:

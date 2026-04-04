@@ -2,7 +2,7 @@
 name = "cartograph"
 version = "0.1.0"
 description = "AI-powered code flow explorer — don't read the code, read the story"
-authors = ["Sandeep Kesarwani <kesarsandeep23@gmail.com>"]
+authors = ["Sandeep Kesarwani <sandeepkesar2310@gmail.com>"]
 license = "MIT"
 readme = "README.md"
 
@@ -13,7 +13,8 @@ rich = "^13.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
-black = "^24.0"
+ruff = "^0.11"
+pre-commit = "^4.0"
 
 [tool.poetry.scripts]
 cartograph = "cartograph.cli:main"
@@ -22,8 +23,19 @@ cartograph = "cartograph.cli:main"
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
-[tool.black]
+[tool.ruff]
 line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "RUF"]
+ignore = ["E501", "N802"]  # N802: ast.NodeVisitor requires camelCase method names (visit_Call, etc.)
+
+[tool.ruff.lint.isort]
+known-first-party = ["cartograph"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: marks tests that require external repos (deselect with '-m \"not integration\"')",
+]

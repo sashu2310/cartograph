@@ -5,7 +5,6 @@ the right parser and runs the right framework detectors for each language.
 """
 
 from pathlib import Path
-from typing import Optional
 
 from cartograph.graph.models import EntryPoint, ParsedModule
 from cartograph.parser.protocols import FrameworkDetector, LanguageAdapter
@@ -23,11 +22,11 @@ class LanguageRegistry:
             self._adapters[ext] = adapter
         self._by_language[adapter.language_id] = adapter
 
-    def get_adapter(self, file_path: str) -> Optional[LanguageAdapter]:
+    def get_adapter(self, file_path: str) -> LanguageAdapter | None:
         ext = Path(file_path).suffix
         return self._adapters.get(ext)
 
-    def get_by_language(self, language_id: str) -> Optional[LanguageAdapter]:
+    def get_by_language(self, language_id: str) -> LanguageAdapter | None:
         return self._by_language.get(language_id)
 
     @property

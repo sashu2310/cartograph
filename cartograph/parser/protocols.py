@@ -6,14 +6,12 @@ framework detectors) is pluggable. Everything below it (graph builder, LLM layer
 CLI, VS Code extension) never changes when a new language is added.
 """
 
-from typing import Optional, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from cartograph.graph.models import (
     AsyncBoundaryType,
-    ConditionalBranch,
     EntryPoint,
     FunctionCall,
-    ParsedFunction,
     ParsedImport,
     ParsedModule,
 )
@@ -38,7 +36,7 @@ class LanguageAdapter(Protocol):
         """File extensions this adapter handles: {'.py'}, {'.java'}."""
         ...
 
-    def parse_file(self, file_path: str, module_path: str) -> Optional[ParsedModule]:
+    def parse_file(self, file_path: str, module_path: str) -> ParsedModule | None:
         """Parse a single file into uniform IR.
 
         Returns None if the file can't be parsed (syntax error, encoding issue).
@@ -48,7 +46,7 @@ class LanguageAdapter(Protocol):
 
     def resolve_import(
         self, imp: ParsedImport, source_file: str, project_root: str
-    ) -> Optional[str]:
+    ) -> str | None:
         """Resolve an import to an absolute file path.
 
         Returns None if the import can't be resolved (external package,
@@ -80,7 +78,7 @@ class FrameworkDetector(Protocol):
         """
         ...
 
-    def detect_async_boundary(self, call: FunctionCall) -> Optional[AsyncBoundaryType]:
+    def detect_async_boundary(self, call: FunctionCall) -> AsyncBoundaryType | None:
         """Check if a function call is an async dispatch.
 
         Examples: .delay() → Celery async, @Async → Spring async,
@@ -88,7 +86,7 @@ class FrameworkDetector(Protocol):
         """
         ...
 
-    def annotate_call(self, call: FunctionCall) -> Optional[dict]:
+    def annotate_call(self, call: FunctionCall) -> dict | None:
         """Add framework-specific metadata to a call.
 
         Examples: .filter() → {operation: "read", model: "Sensor"},

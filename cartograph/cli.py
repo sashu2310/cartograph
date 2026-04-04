@@ -8,7 +8,7 @@ from rich.console import Console
 from rich.table import Table
 
 from cartograph.config import CartographConfig
-from cartograph.parser.registry import FrameworkRegistry, LanguageRegistry
+from cartograph.graph.models import ProjectIndex
 from cartograph.parser.languages.python import PythonAdapter
 from cartograph.parser.languages.python.frameworks import (
     CeleryDetector,
@@ -16,7 +16,7 @@ from cartograph.parser.languages.python.frameworks import (
     DjangoORMDetector,
     DjangoSignalDetector,
 )
-from cartograph.graph.models import ParsedModule, ProjectIndex
+from cartograph.parser.registry import FrameworkRegistry, LanguageRegistry
 
 console = Console()
 
@@ -101,7 +101,9 @@ def init(path: str, include_tests: bool):
         class_count = len(mod.classes)
         total_functions += func_count
         total_classes += class_count
-        table.add_row(mod.module_path, str(func_count), str(class_count), str(len(mod.imports)))
+        table.add_row(
+            mod.module_path, str(func_count), str(class_count), str(len(mod.imports))
+        )
 
     console.print(table)
     console.print(
@@ -139,7 +141,10 @@ def trace(path: str, function_name: str, output: str, depth: int):
     target = None
     for module in index.modules.values():
         for func in module.functions:
-            if func.qualified_name.endswith(function_name) or func.name == function_name:
+            if (
+                func.qualified_name.endswith(function_name)
+                or func.name == function_name
+            ):
                 target = func
                 break
         if target:
@@ -154,7 +159,7 @@ def trace(path: str, function_name: str, output: str, depth: int):
     console.print(f"[dim]Decorators:[/] {', '.join(target.decorators) or 'none'}")
     console.print(f"[dim]Direct calls:[/] {len(target.calls)}")
     console.print(f"[dim]Branches:[/] {len(target.branches)}")
-    console.print(f"\n[bold]Call tree:[/]\n")
+    console.print("\n[bold]Call tree:[/]\n")
 
     _print_call_tree(target, index, depth=depth, prefix="")
 
@@ -187,7 +192,9 @@ def _print_call_tree(func, index: ProjectIndex, depth=10, prefix="", visited=Non
 
         resolved = _resolve_call(call, index)
         if resolved:
-            _print_call_tree(resolved, index, depth - 1, prefix + "  │ ", visited.copy())
+            _print_call_tree(
+                resolved, index, depth - 1, prefix + "  │ ", visited.copy()
+            )
 
     for branch in func.branches:
         label = "else" if branch.is_else else f"if {branch.condition or '...'}"

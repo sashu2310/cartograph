@@ -4,8 +4,6 @@ Detects: @api_controller, @route.get/post/patch/delete,
 @generic_api_controller, URL patterns.
 """
 
-from typing import Optional
-
 from cartograph.graph.models import (
     AsyncBoundaryType,
     EntryPoint,
@@ -13,7 +11,6 @@ from cartograph.graph.models import (
     FunctionCall,
     ParsedModule,
 )
-
 
 CONTROLLER_DECORATORS = {"api_controller", "generic_api_controller"}
 
@@ -38,35 +35,39 @@ class DjangoNinjaDetector:
                 if dec in CONTROLLER_DECORATORS:
                     url_prefix = self._extract_url(func.decorator_details)
                     current_controller_url = url_prefix or ""
-                    entries.append(EntryPoint(
-                        node_id=func.qualified_name,
-                        type=EntryPointType.API_ROUTE,
-                        trigger=f"Controller: {url_prefix or '/'}",
-                        description=func.docstring,
-                    ))
+                    entries.append(
+                        EntryPoint(
+                            node_id=func.qualified_name,
+                            type=EntryPointType.API_ROUTE,
+                            trigger=f"Controller: {url_prefix or '/'}",
+                            description=func.docstring,
+                        )
+                    )
                     break
 
                 http_method = ROUTE_DECORATORS.get(dec)
                 if http_method:
                     route_path = self._extract_url(func.decorator_details)
                     full_path = f"{current_controller_url}{route_path or ''}"
-                    entries.append(EntryPoint(
-                        node_id=func.qualified_name,
-                        type=EntryPointType.API_ROUTE,
-                        trigger=f"{http_method} {full_path}",
-                        description=func.docstring,
-                    ))
+                    entries.append(
+                        EntryPoint(
+                            node_id=func.qualified_name,
+                            type=EntryPointType.API_ROUTE,
+                            trigger=f"{http_method} {full_path}",
+                            description=func.docstring,
+                        )
+                    )
                     break
 
         return entries
 
-    def detect_async_boundary(self, call: FunctionCall) -> Optional[AsyncBoundaryType]:
+    def detect_async_boundary(self, call: FunctionCall) -> AsyncBoundaryType | None:
         return None
 
-    def annotate_call(self, call: FunctionCall) -> Optional[dict]:
+    def annotate_call(self, call: FunctionCall) -> dict | None:
         return None
 
-    def _extract_url(self, decorator_details: list[dict]) -> Optional[str]:
+    def _extract_url(self, decorator_details: list[dict]) -> str | None:
         for detail in decorator_details:
             args = detail.get("args", [])
             if args and isinstance(args[0], str):

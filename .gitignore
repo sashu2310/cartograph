@@ -10,5 +10,6 @@ build/
 venv/
 .env
 .cartograph/
+.claude/
 .pytest_cache/
 .mypy_cache/

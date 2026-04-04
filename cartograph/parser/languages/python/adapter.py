@@ -12,7 +12,6 @@ and all consumers remain unchanged.
 import ast
 import hashlib
 from pathlib import Path
-from typing import Optional
 
 from cartograph.graph.models import (
     ConditionalBranch,
@@ -30,7 +29,7 @@ class _CallExtractor(ast.NodeVisitor):
     def __init__(self):
         self.calls: list[FunctionCall] = []
         self.branches: list[ConditionalBranch] = []
-        self._current_branch: Optional[ConditionalBranch] = None
+        self._current_branch: ConditionalBranch | None = None
 
     def visit_Call(self, node: ast.Call) -> None:
         call = self._extract_call(node)
@@ -63,7 +62,7 @@ class _CallExtractor(ast.NodeVisitor):
             self._current_branch = None
             self.branches.append(else_branch)
 
-    def _extract_call(self, node: ast.Call) -> Optional[FunctionCall]:
+    def _extract_call(self, node: ast.Call) -> FunctionCall | None:
         if isinstance(node.func, ast.Name):
             return FunctionCall(
                 name=node.func.id,
@@ -85,7 +84,7 @@ class _CallExtractor(ast.NodeVisitor):
 
         return None
 
-    def _get_receiver(self, node: ast.expr) -> Optional[str]:
+    def _get_receiver(self, node: ast.expr) -> str | None:
         if isinstance(node, ast.Name):
             return node.id
         elif isinstance(node, ast.Attribute):
@@ -95,7 +94,7 @@ class _CallExtractor(ast.NodeVisitor):
             return self._get_receiver(node.func)
         return None
 
-    def _unparse_condition(self, node: ast.expr) -> Optional[str]:
+    def _unparse_condition(self, node: ast.expr) -> str | None:
         try:
             return ast.unparse(node)
         except Exception:
@@ -114,26 +113,30 @@ class _ModuleVisitor(ast.NodeVisitor):
         self.functions: list[ParsedFunction] = []
         self.classes: list[str] = []
         self.imports: list[ParsedImport] = []
-        self._current_class: Optional[str] = None
+        self._current_class: str | None = None
 
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
-            self.imports.append(ParsedImport(
-                module=alias.name,
-                name=alias.name.split(".")[-1],
-                alias=alias.asname,
-            ))
+            self.imports.append(
+                ParsedImport(
+                    module=alias.name,
+                    name=alias.name.split(".")[-1],
+                    alias=alias.asname,
+                )
+            )
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         module = node.module or ""
         for alias in node.names:
-            self.imports.append(ParsedImport(
-                module=module,
-                name=alias.name,
-                alias=alias.asname,
-                is_relative=node.level > 0,
-                level=node.level,
-            ))
+            self.imports.append(
+                ParsedImport(
+                    module=module,
+                    name=alias.name,
+                    alias=alias.asname,
+                    is_relative=node.level > 0,
+                    level=node.level,
+                )
+            )
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self.classes.append(node.name)
@@ -142,18 +145,20 @@ class _ModuleVisitor(ast.NodeVisitor):
         decorators = self._extract_decorators(node)
         decorator_details = self._extract_decorator_details(node)
 
-        self.functions.append(ParsedFunction(
-            name=node.name,
-            qualified_name=f"{self.module_path}.{node.name}",
-            file_path=self.file_path,
-            line_start=node.lineno,
-            line_end=node.end_lineno or node.lineno,
-            type=NodeType.CLASS,
-            docstring=ast.get_docstring(node),
-            decorators=decorators,
-            decorator_details=decorator_details,
-            module_path=self.module_path,
-        ))
+        self.functions.append(
+            ParsedFunction(
+                name=node.name,
+                qualified_name=f"{self.module_path}.{node.name}",
+                file_path=self.file_path,
+                line_start=node.lineno,
+                line_end=node.end_lineno or node.lineno,
+                type=NodeType.CLASS,
+                docstring=ast.get_docstring(node),
+                decorators=decorators,
+                decorator_details=decorator_details,
+                module_path=self.module_path,
+            )
+        )
 
         self.generic_visit(node)
         self._current_class = None
@@ -181,21 +186,23 @@ class _ModuleVisitor(ast.NodeVisitor):
         for stmt in node.body:
             extractor.visit(stmt)
 
-        self.functions.append(ParsedFunction(
-            name=name,
-            qualified_name=qualified_name,
-            file_path=self.file_path,
-            line_start=node.lineno,
-            line_end=node.end_lineno or node.lineno,
-            type=node_type,
-            docstring=ast.get_docstring(node),
-            decorators=decorators,
-            decorator_details=decorator_details,
-            calls=extractor.calls,
-            branches=extractor.branches,
-            class_name=self._current_class,
-            module_path=self.module_path,
-        ))
+        self.functions.append(
+            ParsedFunction(
+                name=name,
+                qualified_name=qualified_name,
+                file_path=self.file_path,
+                line_start=node.lineno,
+                line_end=node.end_lineno or node.lineno,
+                type=node_type,
+                docstring=ast.get_docstring(node),
+                decorators=decorators,
+                decorator_details=decorator_details,
+                calls=extractor.calls,
+                branches=extractor.branches,
+                class_name=self._current_class,
+                module_path=self.module_path,
+            )
+        )
 
     def _extract_decorators(self, node) -> list[str]:
         decorators = []
@@ -255,10 +262,10 @@ class PythonAdapter:
     handled here — those are in frameworks/*.py detectors.
     """
 
-    language_id = "python"
-    file_extensions = {".py"}
+    language_id: str = "python"
+    file_extensions: set[str] = frozenset({".py"})
 
-    def parse_file(self, file_path: str, module_path: str) -> Optional[ParsedModule]:
+    def parse_file(self, file_path: str, module_path: str) -> ParsedModule | None:
         path = Path(file_path)
         if not path.exists() or path.suffix != ".py":
             return None
@@ -286,7 +293,7 @@ class PythonAdapter:
 
     def resolve_import(
         self, imp: ParsedImport, source_file: str, project_root: str
-    ) -> Optional[str]:
+    ) -> str | None:
         root = Path(project_root)
 
         if imp.is_relative:
@@ -296,10 +303,7 @@ class PythonAdapter:
             for _ in range(levels_up):
                 base = base.parent
 
-            if imp.module:
-                target = base / imp.module.replace(".", "/")
-            else:
-                target = base
+            target = base / imp.module.replace(".", "/") if imp.module else base
         else:
             target = root / imp.module.replace(".", "/")
 

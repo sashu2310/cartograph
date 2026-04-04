@@ -4,8 +4,6 @@ Annotates function calls with read/write/delete semantics
 when they match ORM query patterns.
 """
 
-from typing import Optional
-
 from cartograph.graph.models import (
     AsyncBoundaryType,
     EntryPoint,
@@ -13,16 +11,33 @@ from cartograph.graph.models import (
     ParsedModule,
 )
 
-
 ORM_READ_METHODS = {
-    "filter", "get", "all", "values", "values_list", "first", "last",
-    "exists", "count", "aggregate", "annotate", "select_related",
-    "prefetch_related", "order_by", "distinct", "exclude",
+    "filter",
+    "get",
+    "all",
+    "values",
+    "values_list",
+    "first",
+    "last",
+    "exists",
+    "count",
+    "aggregate",
+    "annotate",
+    "select_related",
+    "prefetch_related",
+    "order_by",
+    "distinct",
+    "exclude",
 }
 
 ORM_WRITE_METHODS = {
-    "create", "save", "bulk_create", "bulk_update", "update",
-    "get_or_create", "update_or_create",
+    "create",
+    "save",
+    "bulk_create",
+    "bulk_update",
+    "update",
+    "get_or_create",
+    "update_or_create",
 }
 
 ORM_DELETE_METHODS = {"delete"}
@@ -34,10 +49,10 @@ class DjangoORMDetector:
     def detect_entry_points(self, module: ParsedModule) -> list[EntryPoint]:
         return []
 
-    def detect_async_boundary(self, call: FunctionCall) -> Optional[AsyncBoundaryType]:
+    def detect_async_boundary(self, call: FunctionCall) -> AsyncBoundaryType | None:
         return None
 
-    def annotate_call(self, call: FunctionCall) -> Optional[dict]:
+    def annotate_call(self, call: FunctionCall) -> dict | None:
         if not call.is_method_call:
             return None
 
@@ -55,7 +70,7 @@ class DjangoORMDetector:
 
         return None
 
-    def _extract_model(self, receiver: Optional[str]) -> Optional[str]:
+    def _extract_model(self, receiver: str | None) -> str | None:
         if not receiver:
             return None
         # "Sensor.objects" → "Sensor"

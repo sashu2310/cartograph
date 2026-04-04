@@ -2,13 +2,21 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
-
 
 DEFAULT_EXCLUDE_DIRS = {
-    "__pycache__", ".git", ".venv", "venv", "node_modules",
-    ".eggs", "dist", "build", ".tox", ".mypy_cache",
-    "migrations", ".claude", ".cartograph",
+    "__pycache__",
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    ".eggs",
+    "dist",
+    "build",
+    ".tox",
+    ".mypy_cache",
+    "migrations",
+    ".claude",
+    ".cartograph",
 }
 
 
@@ -19,8 +27,10 @@ class CartographConfig:
     root_path: str
     exclude_dirs: set[str] = field(default_factory=lambda: DEFAULT_EXCLUDE_DIRS.copy())
     include_tests: bool = False
-    framework_hints: list[str] = field(default_factory=lambda: ["django_ninja", "celery"])
-    cache_dir: Optional[str] = None
+    framework_hints: list[str] = field(
+        default_factory=lambda: ["django_ninja", "celery"]
+    )
+    cache_dir: str | None = None
 
     def __post_init__(self):
         if not self.include_tests:

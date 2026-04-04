@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 
 class NodeType(Enum):
@@ -49,20 +48,20 @@ class FunctionCall:
     """A function/method call found within a function body."""
 
     name: str
-    qualified_name: Optional[str] = None
+    qualified_name: str | None = None
     line: int = 0
     is_method_call: bool = False
-    receiver: Optional[str] = None
+    receiver: str | None = None
     args_count: int = 0
     is_async_dispatch: bool = False
-    async_type: Optional[AsyncBoundaryType] = None
+    async_type: AsyncBoundaryType | None = None
 
 
 @dataclass
 class ConditionalBranch:
     """A conditional branch (if/elif/else) within a function."""
 
-    condition: Optional[str] = None
+    condition: str | None = None
     line: int = 0
     calls: list[FunctionCall] = field(default_factory=list)
     is_else: bool = False
@@ -78,13 +77,13 @@ class ParsedFunction:
     line_start: int
     line_end: int
     type: NodeType = NodeType.FUNCTION
-    docstring: Optional[str] = None
+    docstring: str | None = None
     decorators: list[str] = field(default_factory=list)
     decorator_details: list[dict] = field(default_factory=list)
     calls: list[FunctionCall] = field(default_factory=list)
     branches: list[ConditionalBranch] = field(default_factory=list)
-    class_name: Optional[str] = None
-    module_path: Optional[str] = None
+    class_name: str | None = None
+    module_path: str | None = None
     imports: dict[str, str] = field(default_factory=dict)
     annotations: dict = field(default_factory=dict)
 
@@ -95,7 +94,7 @@ class ParsedImport:
 
     module: str
     name: str
-    alias: Optional[str] = None
+    alias: str | None = None
     is_relative: bool = False
     level: int = 0
 
@@ -109,7 +108,7 @@ class ParsedModule:
     functions: list[ParsedFunction] = field(default_factory=list)
     classes: list[str] = field(default_factory=list)
     imports: list[ParsedImport] = field(default_factory=list)
-    file_hash: Optional[str] = None
+    file_hash: str | None = None
 
 
 @dataclass
@@ -122,13 +121,13 @@ class Node:
     file_path: str
     line_start: int
     line_end: int
-    docstring: Optional[str] = None
+    docstring: str | None = None
     decorators: list[str] = field(default_factory=list)
     annotations: dict = field(default_factory=dict)
-    entry_point_type: Optional[EntryPointType] = None
-    http_method: Optional[str] = None
-    url_pattern: Optional[str] = None
-    celery_queue: Optional[str] = None
+    entry_point_type: EntryPointType | None = None
+    http_method: str | None = None
+    url_pattern: str | None = None
+    celery_queue: str | None = None
     orm_operations: list[dict] = field(default_factory=list)
 
 
@@ -139,9 +138,9 @@ class Edge:
     source_id: str
     target_id: str
     type: EdgeType
-    condition: Optional[str] = None
-    label: Optional[str] = None
-    async_boundary: Optional[AsyncBoundaryType] = None
+    condition: str | None = None
+    label: str | None = None
+    async_boundary: AsyncBoundaryType | None = None
 
 
 @dataclass
@@ -151,7 +150,7 @@ class EntryPoint:
     node_id: str
     type: EntryPointType
     trigger: str
-    description: Optional[str] = None
+    description: str | None = None
 
 
 @dataclass
