@@ -134,7 +134,7 @@ cd cartograph
 # Setup
 python -m venv .venv
 source .venv/bin/activate
-pip install click rich
+pip install -r requirements.txt
 
 # Scan a codebase
 python -m cartograph.cli init /path/to/your/project
@@ -150,6 +150,48 @@ python -m cartograph.cli trace /path/to/your/project "function_name" -o flow.jso
 
 # Control depth
 python -m cartograph.cli trace /path/to/your/project "function_name" --depth 5
+```
+
+---
+
+## Web Viewer
+
+Launch an interactive browser-based DAG explorer for any Python project:
+
+```bash
+# Make sure you're in the cartograph directory with venv active
+cd cartograph
+source .venv/bin/activate
+
+# Launch the web viewer against any Python project
+python -m cartograph.cli serve /path/to/your/project --port 3333
+
+# Open in browser
+# http://127.0.0.1:3333
+```
+
+**What happens:**
+1. Parses all `.py` files in the target project (takes 1-3s for ~3000 functions)
+2. Builds a global call graph with cross-file resolution
+3. Starts a local web server
+4. Open the browser — click entry points in the sidebar to render interactive DAGs
+
+**Features:**
+- Three-panel layout: sidebar (entry points) | DAG canvas (D3 + dagre) | detail panel (on click)
+- Color-coded nodes: blue = API routes, purple = Celery tasks, amber = signal handlers
+- Dashed edges = async dispatch, thick edges = cross-file calls
+- Click node for details (file, line, decorators, callers/callees)
+- Double-click node to re-root the graph at that function
+- `[+]` button on leaf nodes to expand deeper
+- Depth slider (1-8) to control how deep the trace goes
+- Search across all functions with `/` keyboard shortcut
+- Zoom and pan with mouse/trackpad
+
+```bash
+# Examples
+python -m cartograph.cli serve ./celery/celery --port 3333
+python -m cartograph.cli serve ./django/django --port 3333
+python -m cartograph.cli serve ./your-project/src --port 4000 --host 0.0.0.0
 ```
 
 ---
@@ -205,10 +247,11 @@ Full HLD: [docs/hld.md](docs/hld.md) | Parser HLD: [docs/parser-hld.md](docs/par
 | CLI with Rich tree output | ✅ |
 | JSON export | ✅ |
 | Project summary with call graph stats | ✅ |
-| 86 unit tests + 10 integration tests | ✅ |
+| Interactive web viewer (`cartograph serve`) | ✅ |
+| 96 unit tests + integration tests | ✅ |
 | LLM story generation | 📋 Phase 2 |
 | LLM flow annotation | 📋 Phase 2 |
-| VS Code extension | 📋 Phase 2 |
+| VS Code extension | 📋 Phase 3 |
 | Java / Go / JS support | 📋 Phase 4 |
 
 ---

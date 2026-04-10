@@ -9,63 +9,10 @@ from rich.table import Table
 from rich.tree import Tree
 
 from cartograph.config import CartographConfig
-from cartograph.graph.call_graph import CallGraph, CallGraphBuilder
-from cartograph.graph.models import ProjectIndex
-from cartograph.parser.languages.python import PythonAdapter
-from cartograph.parser.languages.python.frameworks import (
-    CeleryDetector,
-    DjangoNinjaDetector,
-    DjangoORMDetector,
-    DjangoSignalDetector,
-)
-from cartograph.parser.registry import FrameworkRegistry, LanguageRegistry
+from cartograph.core import parse_and_build
+from cartograph.graph.call_graph import CallGraph
 
 console = Console()
-
-
-def _build_registries():
-    """Build language and framework registries with all available plugins."""
-    lang_registry = LanguageRegistry()
-    lang_registry.register(PythonAdapter())
-
-    fw_registry = FrameworkRegistry()
-    fw_registry.register("python", CeleryDetector())
-    fw_registry.register("python", DjangoNinjaDetector())
-    fw_registry.register("python", DjangoORMDetector())
-    fw_registry.register("python", DjangoSignalDetector())
-
-    return lang_registry, fw_registry
-
-
-def _parse_project(config: CartographConfig) -> ProjectIndex:
-    """Parse a project using the registry-based pipeline."""
-    lang_registry, fw_registry = _build_registries()
-    index = ProjectIndex(root_path=config.root_path)
-    root = Path(config.root_path)
-
-    for source_file in root.rglob("*"):
-        if not source_file.is_file():
-            continue
-        if any(excluded in source_file.parts for excluded in config.exclude_dirs):
-            continue
-
-        adapter = lang_registry.get_adapter(str(source_file))
-        if not adapter:
-            continue
-
-        relative = source_file.relative_to(root)
-        module_path = str(relative.with_suffix("")).replace("/", ".")
-
-        module = adapter.parse_file(str(source_file), module_path)
-        if not module:
-            continue
-
-        entry_points = fw_registry.detect_all_entry_points(module, adapter.language_id)
-        index.entry_points.extend(entry_points)
-        fw_registry.annotate_module(module, adapter.language_id)
-        index.modules[module.module_path] = module
-
-    return index
 
 
 @click.group()
@@ -81,10 +28,7 @@ def init(path: str, include_tests: bool):
     config = CartographConfig(root_path=path, include_tests=include_tests)
     console.print(f"\n[bold blue]CARTOGRAPH[/] scanning [green]{path}[/]\n")
 
-    index = _parse_project(config)
-
-    # Build call graph
-    graph = CallGraphBuilder(index).build()
+    index, graph = parse_and_build(config)
 
     # Module table
     table = Table(title="Parsed Modules")
@@ -140,8 +84,7 @@ def trace(path: str, function_name: str, output: str, depth: int):
     config = CartographConfig(root_path=path)
     console.print(f"\n[bold blue]CARTOGRAPH[/] tracing [green]{function_name}[/]\n")
 
-    index = _parse_project(config)
-    graph = CallGraphBuilder(index).build()
+    _index, graph = parse_and_build(config)
 
     # Find the target function
     target_qname = None
@@ -385,8 +328,7 @@ def summary(path: str):
     config = CartographConfig(root_path=path)
     console.print(f"\n[bold blue]CARTOGRAPH[/] analyzing [green]{path}[/]\n")
 
-    index = _parse_project(config)
-    graph = CallGraphBuilder(index).build()
+    index, graph = parse_and_build(config)
 
     console.print(f"[bold]Modules:[/]        {index.total_modules}")
     console.print(f"[bold]Functions:[/]      {index.total_functions}")
@@ -416,6 +358,39 @@ def summary(path: str):
             console.print(f"  {count:3d}  {qname}")
 
     console.print()
+
+
+@main.command()
+@click.argument("path", type=click.Path(exists=True))
+@click.option("--port", "-p", default=3333, type=int, help="Port to serve on")
+@click.option("--host", default="127.0.0.1", help="Host to bind to")
+@click.option("--include-tests", is_flag=True, help="Include test files")
+def serve(path: str, port: int, host: str, include_tests: bool):
+    """Launch interactive web viewer for code flow exploration."""
+    import uvicorn
+
+    from cartograph.web import create_app
+
+    config = CartographConfig(root_path=path, include_tests=include_tests)
+    project_name = Path(path).resolve().name
+
+    console.print(f"\n[bold blue]CARTOGRAPH[/] parsing [green]{path}[/] ...\n")
+    index, graph = parse_and_build(config)
+
+    console.print(
+        f"  [dim]Parsed:[/] {index.total_modules} modules, "
+        f"{index.total_functions} functions, "
+        f"{graph.total_resolved} edges, "
+        f"{len(index.entry_points)} entry points\n"
+    )
+
+    app = create_app(graph, index, project_name)
+
+    console.print(
+        f"[bold green]Ready.[/] Open [link=http://{host}:{port}]http://{host}:{port}[/link]\n"
+    )
+
+    uvicorn.run(app, host=host, port=port, log_level="warning")
 
 
 if __name__ == "__main__":

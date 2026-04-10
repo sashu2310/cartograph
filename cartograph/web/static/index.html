@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CARTOGRAPH</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="https://unpkg.com/@dagrejs/dagre@1.1.4/dist/dagre.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1117;
+    --bg-panel: #161822;
+    --bg-hover: #1e2030;
+    --border: #2a2d3e;
+    --text: #c8cad8;
+    --text-dim: #6b7084;
+    --text-bright: #e4e6f0;
+    --accent-blue: #3b82f6;
+    --accent-purple: #8b5cf6;
+    --accent-amber: #f59e0b;
+    --accent-cyan: #06b6d4;
+    --accent-slate: #64748b;
+    --accent-green: #22c55e;
+    --accent-red: #ef4444;
+    --node-fn: #334155;
+    --node-fn-stroke: #475569;
+    --node-api: #1e3a5f;
+    --node-api-stroke: #3b82f6;
+    --node-celery: #2e1065;
+    --node-celery-stroke: #8b5cf6;
+    --node-signal: #451a03;
+    --node-signal-stroke: #f59e0b;
+    --node-method: #083344;
+    --node-method-stroke: #06b6d4;
+    --edge-sync: #475569;
+    --edge-async: #8b5cf6;
+    --edge-cross: #f59e0b;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    background: var(--bg);
+    color: var(--text);
+    display: grid;
+    grid-template-columns: 280px 1fr 0px;
+    grid-template-rows: 48px 1fr;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  body.detail-open {
+    grid-template-columns: 280px 1fr 320px;
+  }
+
+  /* Header */
+  #header {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0 16px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+    z-index: 10;
+  }
+
+  #header .logo {
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--accent-blue);
+    white-space: nowrap;
+  }
+
+  #header .project-name {
+    font-size: 13px;
+    color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #header .stats {
+    font-size: 11px;
+    color: var(--text-dim);
+    white-space: nowrap;
+    margin-left: auto;
+  }
+
+  #header .stats span {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  #search-box {
+    width: 240px;
+    padding: 6px 10px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 12px;
+    outline: none;
+  }
+
+  #search-box:focus { border-color: var(--accent-blue); }
+
+  #search-results {
+    position: absolute;
+    top: 42px;
+    width: 360px;
+    max-height: 300px;
+    overflow-y: auto;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    z-index: 100;
+    display: none;
+  }
+
+  .search-item {
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .search-item:hover { background: var(--bg-hover); }
+  .search-item .qname { color: var(--text-dim); font-size: 11px; }
+
+  .depth-control {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+
+  .depth-control input[type="range"] {
+    width: 80px;
+    accent-color: var(--accent-blue);
+  }
+
+  /* Sidebar */
+  #sidebar {
+    background: var(--bg-panel);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 8px 0;
+  }
+
+  .ep-group {
+    margin-bottom: 4px;
+  }
+
+  .ep-group-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .ep-group-header:hover { color: var(--text); }
+  .ep-group-header .count { color: var(--text-dim); font-weight: 400; }
+  .ep-group-header .arrow { transition: transform 0.15s; }
+  .ep-group-header.collapsed .arrow { transform: rotate(-90deg); }
+
+  .ep-group-header.type-api_route { color: var(--accent-blue); }
+  .ep-group-header.type-celery_task { color: var(--accent-purple); }
+  .ep-group-header.type-signal_handler { color: var(--accent-amber); }
+
+  .ep-list { padding: 0 4px; }
+  .ep-list.collapsed { display: none; }
+
+  .ep-item {
+    padding: 4px 8px 4px 20px;
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text);
+  }
+
+  .ep-item:hover { background: var(--bg-hover); }
+  .ep-item.active { background: var(--accent-blue); color: #fff; }
+  .ep-item .trigger { color: var(--text-dim); font-size: 11px; }
+
+  /* Canvas */
+  #canvas {
+    position: relative;
+    overflow: hidden;
+    background: var(--bg);
+  }
+
+  #canvas svg {
+    width: 100%;
+    height: 100%;
+  }
+
+  #canvas .empty-state {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    color: var(--text-dim);
+  }
+
+  #canvas .empty-state h2 {
+    font-size: 16px;
+    color: var(--text);
+    margin-bottom: 8px;
+  }
+
+  #canvas .empty-state p { font-size: 13px; }
+
+  /* DAG nodes */
+  .dag-node rect {
+    rx: 6;
+    ry: 6;
+    cursor: pointer;
+    transition: filter 0.15s;
+  }
+
+  .dag-node:hover rect { filter: brightness(1.3); }
+  .dag-node.selected rect { stroke-width: 2.5; filter: brightness(1.4); }
+
+  .dag-node text {
+    font-family: inherit;
+    font-size: 12px;
+    fill: var(--text-bright);
+    pointer-events: none;
+  }
+
+  .dag-node .expand-btn {
+    cursor: pointer;
+    fill: var(--accent-blue);
+    font-size: 14px;
+    font-weight: bold;
+  }
+
+  .dag-node .expand-btn:hover { fill: var(--accent-green); }
+
+  /* DAG edges */
+  .dag-edge path {
+    fill: none;
+    stroke-width: 1.5;
+  }
+
+  .dag-edge.sync path { stroke: var(--edge-sync); }
+  .dag-edge.async path { stroke: var(--edge-async); stroke-dasharray: 6 3; }
+  .dag-edge.cross-file path { stroke: var(--edge-cross); stroke-width: 2; }
+
+  .dag-edge text {
+    font-size: 10px;
+    fill: var(--text-dim);
+  }
+
+  .dag-edge marker path { fill: var(--edge-sync); }
+
+  /* Detail panel */
+  #detail {
+    background: var(--bg-panel);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 12px;
+    display: none;
+  }
+
+  body.detail-open #detail { display: block; }
+
+  #detail .detail-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+
+  #detail .detail-header h3 {
+    font-size: 14px;
+    color: var(--text-bright);
+    word-break: break-all;
+  }
+
+  #detail .close-btn {
+    cursor: pointer;
+    color: var(--text-dim);
+    font-size: 18px;
+    line-height: 1;
+    padding: 4px;
+  }
+
+  #detail .close-btn:hover { color: var(--text); }
+
+  #detail .detail-section {
+    margin-bottom: 12px;
+  }
+
+  #detail .detail-section h4 {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+  }
+
+  #detail .detail-section .value {
+    font-size: 12px;
+    color: var(--text);
+    word-break: break-all;
+  }
+
+  #detail .detail-section .value.file {
+    color: var(--accent-cyan);
+  }
+
+  #detail .detail-section .decorator {
+    color: var(--accent-green);
+    font-size: 12px;
+  }
+
+  #detail .caller-item, #detail .callee-item {
+    padding: 4px 0;
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--accent-blue);
+    border-bottom: 1px solid var(--border);
+  }
+
+  #detail .caller-item:hover, #detail .callee-item:hover {
+    color: var(--accent-cyan);
+  }
+
+  #detail .caller-item .file-hint, #detail .callee-item .file-hint {
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+
+  /* Legend */
+  .legend {
+    position: absolute;
+    bottom: 12px;
+    left: 12px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 11px;
+    z-index: 5;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 3px;
+  }
+
+  .legend-item:last-child { margin-bottom: 0; }
+
+  .legend-swatch {
+    width: 14px;
+    height: 10px;
+    border-radius: 2px;
+    border: 1px solid;
+  }
+
+  .legend-line {
+    width: 20px;
+    height: 0;
+    border-top: 2px solid;
+  }
+
+  .legend-line.dashed { border-top-style: dashed; }
+</style>
+</head>
+<body>
+  <div id="header">
+    <span class="logo">CARTOGRAPH</span>
+    <span class="project-name" id="project-name"></span>
+    <div style="position:relative">
+      <input type="text" id="search-box" placeholder="Search functions... ( / )">
+      <div id="search-results"></div>
+    </div>
+    <div class="depth-control">
+      <label for="depth-slider">Depth:</label>
+      <input type="range" id="depth-slider" min="1" max="8" value="5">
+      <span id="depth-value">5</span>
+    </div>
+    <div class="stats" id="stats"></div>
+  </div>
+
+  <div id="sidebar"></div>
+
+  <div id="canvas">
+    <div class="empty-state" id="empty-state">
+      <h2>Select an entry point</h2>
+      <p>Choose a function from the sidebar to explore its call graph</p>
+    </div>
+    <svg id="dag-svg"></svg>
+    <div class="legend" id="legend" style="display:none">
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--node-api);border-color:var(--node-api-stroke)"></div> API Route</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--node-celery);border-color:var(--node-celery-stroke)"></div> Celery Task</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--node-signal);border-color:var(--node-signal-stroke)"></div> Signal Handler</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--node-method);border-color:var(--node-method-stroke)"></div> Method</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--node-fn);border-color:var(--node-fn-stroke)"></div> Function</div>
+      <div class="legend-item"><div class="legend-line" style="border-color:var(--edge-sync)"></div> Sync call</div>
+      <div class="legend-item"><div class="legend-line dashed" style="border-color:var(--edge-async)"></div> Async dispatch</div>
+      <div class="legend-item"><div class="legend-line" style="border-color:var(--edge-cross)"></div> Cross-file</div>
+    </div>
+  </div>
+
+  <div id="detail">
+    <div class="detail-header">
+      <h3 id="detail-name"></h3>
+      <span class="close-btn" id="detail-close">&times;</span>
+    </div>
+    <div id="detail-content"></div>
+  </div>
+
+<script>
+// ─── State ───────────────────────────────────────────────
+let overview = null;
+let currentGraph = null;
+let currentQname = null;
+let selectedNode = null;
+let depth = 5;
+
+// ─── API ─────────────────────────────────────────────────
+async function api(path) {
+  const res = await fetch(path);
+  return res.json();
+}
+
+// ─── Init ────────────────────────────────────────────────
+async function init() {
+  overview = await api('/api/overview');
+  document.getElementById('project-name').textContent = overview.project_name;
+  document.getElementById('stats').innerHTML =
+    `<span>${overview.stats.total_modules}</span> modules &middot; ` +
+    `<span>${overview.stats.total_functions}</span> functions &middot; ` +
+    `<span>${overview.stats.total_edges}</span> edges &middot; ` +
+    `<span>${overview.stats.total_entry_points}</span> entry points`;
+  renderSidebar();
+}
+
+// ─── Sidebar ─────────────────────────────────────────────
+const TYPE_LABELS = {
+  api_route: 'API Routes',
+  celery_task: 'Celery Tasks',
+  signal_handler: 'Signal Handlers',
+  celery_beat: 'Celery Beat',
+  management_command: 'Management Commands',
+};
+
+function renderSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  sidebar.innerHTML = '';
+
+  for (const [type, eps] of Object.entries(overview.entry_points_by_type)) {
+    const group = document.createElement('div');
+    group.className = 'ep-group';
+
+    const header = document.createElement('div');
+    header.className = `ep-group-header type-${type}`;
+    header.innerHTML = `<span class="arrow">&#9660;</span> ${TYPE_LABELS[type] || type} <span class="count">(${eps.length})</span>`;
+    header.onclick = () => {
+      header.classList.toggle('collapsed');
+      list.classList.toggle('collapsed');
+    };
+
+    const list = document.createElement('div');
+    list.className = 'ep-list';
+
+    // Sort by trigger
+    eps.sort((a, b) => a.trigger.localeCompare(b.trigger));
+
+    for (const ep of eps) {
+      const item = document.createElement('div');
+      item.className = 'ep-item';
+      item.dataset.qname = ep.node_id;
+      item.innerHTML = `${ep.trigger} <span class="trigger">${shortName(ep.node_id)}</span>`;
+      item.onclick = () => selectEntryPoint(ep.node_id, item);
+      list.appendChild(item);
+    }
+
+    group.appendChild(header);
+    group.appendChild(list);
+    sidebar.appendChild(group);
+  }
+}
+
+function shortName(qname) {
+  const parts = qname.split('.');
+  return parts.length > 2 ? parts.slice(-2).join('.') : qname;
+}
+
+function selectEntryPoint(qname, el) {
+  document.querySelectorAll('.ep-item.active').forEach(e => e.classList.remove('active'));
+  if (el) el.classList.add('active');
+  loadGraph(qname);
+}
+
+// ─── Graph Loading ───────────────────────────────────────
+async function loadGraph(qname) {
+  currentQname = qname;
+  currentGraph = await api(`/api/graph/${encodeURIComponent(qname)}?depth=${depth}`);
+
+  if (currentGraph.error) {
+    document.getElementById('empty-state').innerHTML =
+      `<h2>Not found</h2><p>${currentGraph.error}</p>`;
+    document.getElementById('empty-state').style.display = '';
+    return;
+  }
+
+  document.getElementById('empty-state').style.display = 'none';
+  document.getElementById('legend').style.display = '';
+  renderDAG(currentGraph);
+}
+
+// ─── DAG Rendering ───────────────────────────────────────
+function renderDAG(data) {
+  const svg = d3.select('#dag-svg');
+  svg.selectAll('*').remove();
+
+  const defs = svg.append('defs');
+  // Arrow markers
+  ['sync', 'async', 'cross'].forEach(type => {
+    const colors = { sync: 'var(--edge-sync)', async: 'var(--edge-async)', cross: 'var(--edge-cross)' };
+    defs.append('marker')
+      .attr('id', `arrow-${type}`)
+      .attr('viewBox', '0 0 10 10')
+      .attr('refX', 10).attr('refY', 5)
+      .attr('markerWidth', 8).attr('markerHeight', 8)
+      .attr('orient', 'auto')
+      .append('path')
+      .attr('d', 'M 0 0 L 10 5 L 0 10 Z')
+      .attr('fill', colors[type]);
+  });
+
+  // Dagre layout
+  const g = new dagre.graphlib.Graph();
+  g.setGraph({ rankdir: 'TB', ranksep: 60, nodesep: 30, edgesep: 15, marginx: 40, marginy: 40 });
+  g.setDefaultEdgeLabel(() => ({}));
+
+  const nodeEntries = Object.entries(data.nodes);
+  if (nodeEntries.length === 0) return;
+
+  for (const [id, node] of nodeEntries) {
+    const labelLen = Math.min(node.name.length, 28);
+    const w = Math.max(labelLen * 8 + 32, 140);
+    g.setNode(id, { label: node.name, width: w, height: 36, ...node });
+  }
+
+  for (const edge of data.edges) {
+    if (data.nodes[edge.source] && data.nodes[edge.target]) {
+      g.setEdge(edge.source, edge.target, { ...edge });
+    }
+  }
+
+  dagre.layout(g);
+
+  // Get graph dimensions
+  const graphInfo = g.graph();
+  const gWidth = graphInfo.width || 800;
+  const gHeight = graphInfo.height || 600;
+
+  // Zoom behavior
+  const container = svg.append('g').attr('class', 'zoom-container');
+  const zoom = d3.zoom()
+    .scaleExtent([0.1, 3])
+    .on('zoom', e => container.attr('transform', e.transform));
+  svg.call(zoom);
+
+  // Render edges
+  const edgeGroup = container.append('g').attr('class', 'edges');
+  g.edges().forEach(e => {
+    const edgeData = g.edge(e);
+    const points = edgeData.points;
+    if (!points || points.length === 0) return;
+
+    const isAsync = edgeData.type === 'async_dispatch';
+    const isCross = edgeData.is_cross_file;
+    const edgeClass = isAsync ? 'async' : isCross ? 'cross-file' : 'sync';
+    const markerType = isAsync ? 'async' : isCross ? 'cross' : 'sync';
+
+    const line = d3.line().x(d => d.x).y(d => d.y).curve(d3.curveBasis);
+
+    const eg = edgeGroup.append('g').attr('class', `dag-edge ${edgeClass}`);
+    eg.append('path')
+      .attr('d', line(points))
+      .attr('marker-end', `url(#arrow-${markerType})`);
+
+    // Label for async edges
+    if (isAsync && edgeData.async_type) {
+      const mid = points[Math.floor(points.length / 2)];
+      eg.append('text')
+        .attr('x', mid.x + 4)
+        .attr('y', mid.y - 6)
+        .text(edgeData.async_type.replace('celery_', ''));
+    }
+  });
+
+  // Render nodes
+  const nodeGroup = container.append('g').attr('class', 'nodes');
+  g.nodes().forEach(id => {
+    const node = g.node(id);
+    if (!node || node.x === undefined) return;
+
+    const { fill, stroke } = nodeColors(node);
+    const ng = nodeGroup.append('g')
+      .attr('class', 'dag-node')
+      .attr('data-qname', id)
+      .attr('transform', `translate(${node.x - node.width / 2}, ${node.y - node.height / 2})`);
+
+    ng.append('rect')
+      .attr('width', node.width)
+      .attr('height', node.height)
+      .attr('fill', fill)
+      .attr('stroke', stroke)
+      .attr('stroke-width', 1.5);
+
+    const displayName = node.label.length > 28 ? node.label.slice(0, 26) + '..' : node.label;
+    ng.append('text')
+      .attr('x', node.expandable ? 14 : node.width / 2)
+      .attr('y', node.height / 2 + 4)
+      .attr('text-anchor', node.expandable ? 'start' : 'middle')
+      .text(displayName);
+
+    // Expand button for nodes with hidden children
+    if (node.expandable) {
+      ng.append('text')
+        .attr('class', 'expand-btn')
+        .attr('x', node.width - 18)
+        .attr('y', node.height / 2 + 5)
+        .attr('text-anchor', 'middle')
+        .text('+')
+        .on('click', async (event) => {
+          event.stopPropagation();
+          await expandNode(id);
+        });
+    }
+
+    // Click: show detail
+    ng.on('click', () => showDetail(id, node));
+
+    // Double-click: re-root
+    ng.on('dblclick', () => {
+      currentQname = id;
+      loadGraph(id);
+      // Update sidebar selection
+      document.querySelectorAll('.ep-item.active').forEach(e => e.classList.remove('active'));
+      const sidebarItem = document.querySelector(`.ep-item[data-qname="${id}"]`);
+      if (sidebarItem) sidebarItem.classList.add('active');
+    });
+  });
+
+  // Fit to viewport
+  const svgEl = document.getElementById('dag-svg');
+  const svgW = svgEl.clientWidth;
+  const svgH = svgEl.clientHeight;
+  const scale = Math.min(svgW / (gWidth + 80), svgH / (gHeight + 80), 1.2);
+  const tx = (svgW - gWidth * scale) / 2;
+  const ty = (svgH - gHeight * scale) / 2;
+  svg.call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+}
+
+function nodeColors(node) {
+  const ann = node.annotations || {};
+  if (ann.entry_point_type === 'api_route') return { fill: 'var(--node-api)', stroke: 'var(--node-api-stroke)' };
+  if (ann.entry_point_type === 'celery_task') return { fill: 'var(--node-celery)', stroke: 'var(--node-celery-stroke)' };
+  if (ann.entry_point_type === 'signal_handler') return { fill: 'var(--node-signal)', stroke: 'var(--node-signal-stroke)' };
+  if (node.type === 'method') return { fill: 'var(--node-method)', stroke: 'var(--node-method-stroke)' };
+  return { fill: 'var(--node-fn)', stroke: 'var(--node-fn-stroke)' };
+}
+
+// ─── Expand Node ─────────────────────────────────────────
+async function expandNode(qname) {
+  const subgraph = await api(`/api/graph/${encodeURIComponent(qname)}?depth=2`);
+  if (!subgraph || subgraph.error) return;
+
+  // Merge into current graph
+  Object.assign(currentGraph.nodes, subgraph.nodes);
+  for (const edge of subgraph.edges) {
+    const exists = currentGraph.edges.some(
+      e => e.source === edge.source && e.target === edge.target
+    );
+    if (!exists) currentGraph.edges.push(edge);
+  }
+
+  renderDAG(currentGraph);
+}
+
+// ─── Detail Panel ────────────────────────────────────────
+async function showDetail(qname, node) {
+  document.body.classList.add('detail-open');
+  document.getElementById('detail-name').textContent = node.label || node.name;
+
+  // Highlight selected node
+  d3.selectAll('.dag-node').classed('selected', false);
+  d3.select(`.dag-node[data-qname="${qname}"]`).classed('selected', true);
+
+  const content = document.getElementById('detail-content');
+  let html = '';
+
+  // File
+  const shortFile = node.file ? node.file.split('/').slice(-3).join('/') : '';
+  html += `<div class="detail-section"><h4>File</h4><div class="value file">${shortFile}:${node.line_start || ''}</div></div>`;
+
+  // Type
+  html += `<div class="detail-section"><h4>Type</h4><div class="value">${node.type || ''}</div></div>`;
+
+  // Decorators
+  if (node.decorators && node.decorators.length) {
+    html += `<div class="detail-section"><h4>Decorators</h4>`;
+    for (const d of node.decorators) {
+      html += `<div class="decorator">@${d}</div>`;
+    }
+    html += `</div>`;
+  }
+
+  // Docstring
+  if (node.docstring) {
+    html += `<div class="detail-section"><h4>Docstring</h4><div class="value">${escapeHtml(node.docstring)}</div></div>`;
+  }
+
+  // Annotations
+  const ann = node.annotations || {};
+  if (Object.keys(ann).length) {
+    html += `<div class="detail-section"><h4>Annotations</h4>`;
+    for (const [k, v] of Object.entries(ann)) {
+      if (v) html += `<div class="value">${k}: ${v}</div>`;
+    }
+    html += `</div>`;
+  }
+
+  // Callees (from current graph)
+  const callees = currentGraph.edges.filter(e => e.source === qname);
+  if (callees.length) {
+    html += `<div class="detail-section"><h4>Calls (${callees.length})</h4>`;
+    for (const e of callees) {
+      const targetNode = currentGraph.nodes[e.target];
+      const name = targetNode ? targetNode.name : e.target.split('.').pop();
+      const asyncLabel = e.type === 'async_dispatch' ? ' <span style="color:var(--accent-purple)">[async]</span>' : '';
+      const crossLabel = e.is_cross_file ? ' <span style="color:var(--accent-amber)">[cross-file]</span>' : '';
+      html += `<div class="callee-item" data-qname="${e.target}">${name}${asyncLabel}${crossLabel}</div>`;
+    }
+    html += `</div>`;
+  }
+
+  content.innerHTML = html;
+
+  // Fetch callers
+  const callerData = await api(`/api/callers/${encodeURIComponent(qname)}`);
+  if (callerData.callers && callerData.callers.length) {
+    let callersHtml = `<div class="detail-section"><h4>Called By (${callerData.callers.length})</h4>`;
+    for (const c of callerData.callers) {
+      const shortF = c.file.split('/').slice(-2).join('/');
+      callersHtml += `<div class="caller-item" data-qname="${c.qualified_name}">${c.name} <span class="file-hint">${shortF}:${c.line_start}</span></div>`;
+    }
+    callersHtml += `</div>`;
+    content.innerHTML += callersHtml;
+  }
+
+  // Click handlers for caller/callee items
+  content.querySelectorAll('.caller-item, .callee-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const q = el.dataset.qname;
+      loadGraph(q);
+    });
+  });
+}
+
+// ─── Search ──────────────────────────────────────────────
+const searchBox = document.getElementById('search-box');
+const searchResults = document.getElementById('search-results');
+let searchTimeout = null;
+
+searchBox.addEventListener('input', () => {
+  clearTimeout(searchTimeout);
+  const q = searchBox.value.trim();
+  if (q.length < 2) { searchResults.style.display = 'none'; return; }
+  searchTimeout = setTimeout(async () => {
+    const data = await api(`/api/search?q=${encodeURIComponent(q)}&limit=15`);
+    if (!data.results.length) { searchResults.style.display = 'none'; return; }
+
+    searchResults.innerHTML = '';
+    for (const r of data.results) {
+      const item = document.createElement('div');
+      item.className = 'search-item';
+      const epBadge = r.is_entry_point ? '<span style="color:var(--accent-green)">[entry]</span> ' : '';
+      item.innerHTML = `${epBadge}${r.name}<br><span class="qname">${r.qualified_name}</span>`;
+      item.onclick = () => {
+        searchResults.style.display = 'none';
+        searchBox.value = '';
+        loadGraph(r.qualified_name);
+      };
+      searchResults.appendChild(item);
+    }
+    searchResults.style.display = '';
+  }, 200);
+});
+
+searchBox.addEventListener('blur', () => {
+  setTimeout(() => { searchResults.style.display = 'none'; }, 200);
+});
+
+// ─── Depth Slider ────────────────────────────────────────
+const depthSlider = document.getElementById('depth-slider');
+const depthValue = document.getElementById('depth-value');
+
+depthSlider.addEventListener('input', () => {
+  depth = parseInt(depthSlider.value);
+  depthValue.textContent = depth;
+});
+
+depthSlider.addEventListener('change', () => {
+  if (currentQname) loadGraph(currentQname);
+});
+
+// ─── Detail Close ────────────────────────────────────────
+document.getElementById('detail-close').addEventListener('click', () => {
+  document.body.classList.remove('detail-open');
+  d3.selectAll('.dag-node').classed('selected', false);
+});
+
+// ─── Keyboard ────────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  if (e.key === '/' && document.activeElement !== searchBox) {
+    e.preventDefault();
+    searchBox.focus();
+  }
+  if (e.key === 'Escape') {
+    searchBox.blur();
+    searchResults.style.display = 'none';
+    document.body.classList.remove('detail-open');
+    d3.selectAll('.dag-node').classed('selected', false);
+  }
+});
+
+// ─── Helpers ─────────────────────────────────────────────
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// ─── Boot ────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>
