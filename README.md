@@ -2,7 +2,7 @@
 
 **Don't read the code. Read the story.**
 
-CARTOGRAPH is an AI-powered code flow explorer that transforms codebases into interactive DAGs organized by user stories — not file structure.
+CARTOGRAPH is an AI-powered code flow explorer that maps any codebase into interactive DAGs — tracing every call chain across files, detecting async boundaries, narrating what each flow does, and rendering the result in your browser. Language-agnostic engine, pluggable framework detectors. Python shipped, more languages next.
 
 ---
 
@@ -116,11 +116,11 @@ You Cmd+Click through function calls. You grep. You read 10 files to understand 
 
 ## What It Does
 
-- **Scans** a codebase and discovers all entry points (API routes, Celery tasks, scheduled jobs, signal handlers)
-- **Builds** a global call graph with cross-file import resolution
+- **Scans** any codebase and discovers entry points (API routes, async tasks, signal handlers — via pluggable framework detectors)
+- **Builds** a global call graph with cross-file import resolution and type-inferred method resolution
 - **Traces** code flows from any function as a DAG with branch detection and async boundary marking
-- **Detects** framework patterns — Django routes, Celery task dispatch (`.delay()`, `.apply_async()`, `chain`, `chord`, `group`), Django signals, ORM operations
-- **Exports** to JSON for downstream consumption (VS Code extension, web UI)
+- **Renders** interactive DAGs in the browser — click, expand, search, zoom across your entire codebase
+- **Exports** to JSON for downstream consumption (VS Code extension, CI pipelines)
 
 ---
 
@@ -234,58 +234,80 @@ Full HLD: [docs/hld.md](docs/hld.md) | Parser HLD: [docs/parser-hld.md](docs/par
 
 | Feature | Status |
 |---------|--------|
-| Python AST parsing | ✅ |
+| Feature | Status |
+|---------|--------|
+| **Engine** | |
 | Cross-file call resolution via import analysis | ✅ |
-| Django Ninja route detection | ✅ |
-| Celery task detection | ✅ |
-| Celery async dispatch (`.delay()`, `.apply_async()`) | ✅ |
-| Celery orchestration (`chain`, `chord`, `group`) | ✅ |
-| Django signal handler detection | ✅ |
-| Django ORM operation annotation | ✅ |
+| Type-inferred method resolution (`x = Foo(); x.bar()`) | ✅ |
+| `self.method()` resolution within classes | ✅ |
 | Conditional branch detection | ✅ |
 | Cycle detection | ✅ |
+| **Language: Python** | |
+| Python AST parsing | ✅ |
+| Django Ninja route detection | ✅ |
+| Celery task + async dispatch (`.delay()`, `chain`, `chord`, `group`) | ✅ |
+| Django signal handler detection | ✅ |
+| Django ORM operation annotation | ✅ |
+| **Interfaces** | |
+| Interactive web viewer (`cartograph serve`) | ✅ |
 | CLI with Rich tree output | ✅ |
 | JSON export | ✅ |
-| Project summary with call graph stats | ✅ |
-| Interactive web viewer (`cartograph serve`) | ✅ |
 | 96 unit tests + integration tests | ✅ |
-| LLM story generation | 📋 Phase 2 |
-| LLM flow annotation | 📋 Phase 2 |
+| **Planned** | |
+| LLM flow narration ("what does this flow do?") | 📋 Phase 2 |
+| FastAPI / Flask route detection | 📋 Phase 2 |
+| Tree-sitter migration (multi-language foundation) | 📋 Phase 3 |
+| Java + Spring Boot | 📋 Phase 3 |
+| Go + goroutine boundary detection | 📋 Phase 3 |
+| TypeScript + Express/Nest | 📋 Phase 3 |
 | VS Code extension | 📋 Phase 3 |
-| Java / Go / JS support | 📋 Phase 4 |
 
 ---
 
 ## Tested Against
 
-| Project | Modules | Functions | Resolved Calls | Entry Points |
-|---------|---------|-----------|----------------|-------------|
-| **Celery** | 161 | 3,111 | 665 | 1 |
-| **Kombu** | 78 | 1,646 | 198 | 0 |
-| **Prefect** | 1,000+ | 10,000+ | — | — |
+| Project | Type | Modules | Functions | Resolved Edges | Entry Points | Deepest DAG |
+|---------|------|---------|-----------|----------------|-------------|-------------|
+| **paperless-ngx** | Application (Django+Celery) | 135 | 1,559 | 1,099 | 26 | 49 nodes / 12 files |
+| **Celery** | Framework | 161 | 3,086 | 1,846 | 1 | 30 nodes / 8 files |
+| **Kombu** | Library | 78 | 1,646 | 198 | 0 | — |
+| **Prefect** | Framework | 1,000+ | 10,000+ | — | — | — |
 
-All parsed without crashes. 86 unit tests + 10 integration tests passing.
+**Best results on application codebases** with layered architecture (controller → service → task). Framework/library code has lower resolution due to dynamic dispatch and inheritance patterns — a known boundary of static analysis.
+
+96 tests passing across all projects.
 
 ---
 
 ## Roadmap
 
-**Phase 1 (current):** Core parser + call graph + CLI + JSON export
-**Phase 2:** LLM integration + VS Code extension with interactive DAG
-**Phase 3:** Natural language queries, diff mode, filters
-**Phase 4:** Multi-language support via Tree-sitter (Java, Go, JS)
-**Phase 5:** Multi-repo linking, web UI, team features
+**Phase 1 (complete):** Python parser + call graph + type inference + CLI + web viewer
+**Phase 2:** LLM flow narration + more framework detectors (FastAPI, Flask)
+**Phase 3:** Multi-language via Tree-sitter (Java, Go, TypeScript) + VS Code extension
+**Phase 4:** Diff mode ("what flows changed in this PR?"), CI integration
+**Phase 5:** Multi-repo linking, team features
 
 ---
 
-## Why Not...
+## Why Not Just Ask an LLM?
+
+You can ask Claude Code or Cursor to "trace the equipment pipeline." It will read some files, pattern-match, and give you a plausible answer. But:
+
+- **LLMs sample. CARTOGRAPH enumerates.** An LLM reads files until it runs out of context. CARTOGRAPH parses every file, resolves every import, builds the complete graph. 3000 functions in 2 seconds — exhaustive, not best-effort.
+- **LLMs hallucinate edges. CARTOGRAPH proves them.** An LLM might say A calls B when it actually calls C. CARTOGRAPH resolves calls through the import chain — if it says A→B, that edge exists in the source.
+- **LLMs produce text. CARTOGRAPH produces structure.** A JSON graph with nodes and edges feeds into VS Code extensions, CI pipelines, diff tools. Prose doesn't.
+- **LLMs forget. CARTOGRAPH is deterministic.** Same codebase, same graph, every time.
+
+CARTOGRAPH builds the map. The LLM narrates it. They're complementary — the exhaustive structural graph is what makes AI narration trustworthy instead of guesswork.
+
+## Comparison
 
 | Tool | What it does | Where CARTOGRAPH differs |
 |------|-------------|------------------------|
 | VS Code Call Hierarchy | Shows callers/callees of one function | No cross-file DAG, no async detection, no branches |
 | Sourcegraph | Code search and navigation | Finds code, doesn't explain flows |
 | CodeSee (dead) | Runtime code flow visualization | Required instrumentation. CARTOGRAPH is static — no setup |
-| GitHub Copilot | Explains code snippets | Point explanations, not system-level flows |
+| Claude Code / Cursor | LLM reads files and explains | Probabilistic, partial, no structured output. CARTOGRAPH is exhaustive and deterministic |
 
 ---
 

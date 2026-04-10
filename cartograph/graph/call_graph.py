@@ -222,6 +222,15 @@ class CallGraphBuilder:
             if call.is_async_dispatch and base_receiver in local_names:
                 return local_names[base_receiver]
 
+            # self.method() → resolve to CurrentClass.method
+            if base_receiver == "self" and caller.class_name:
+                candidate = f"{module.module_path}.{caller.class_name}.{call.name}"
+                if candidate in self._function_registry:
+                    return candidate
+                # Don't brute-force suffix match — without inheritance
+                # tracking, we'd match the wrong class (e.g., Cassandra
+                # calling Elasticsearch's decode instead of Base's).
+
             if base_receiver in local_names:
                 receiver_qname = local_names[base_receiver]
                 # Try: receiver.method as qualified name
@@ -236,10 +245,12 @@ class CallGraphBuilder:
                     if candidate in self._function_registry:
                         return candidate
 
-            # Try: receiver is a local variable of a known class type
-            for qname in self._function_registry:
-                if qname.endswith(f".{call.receiver}.{call.name}"):
-                    return qname
+            # Type inference: resolve obj.method() via tracked local types
+            # e.g., registry = LanguageRegistry() → registry.register()
+            #        resolves to LanguageRegistry.register
+            resolved = self._resolve_via_local_types(call, caller, module, local_names)
+            if resolved:
+                return resolved
 
         else:
             # Plain function call: foo()
@@ -256,6 +267,50 @@ class CallGraphBuilder:
                 class_method = f"{module.module_path}.{caller.class_name}.{call.name}"
                 if class_method in self._function_registry:
                     return class_method
+
+        return None
+
+    def _resolve_via_local_types(
+        self,
+        call: FunctionCall,
+        caller: ParsedFunction,
+        module: ParsedModule,
+        local_names: dict[str, str],
+    ) -> str | None:
+        """Resolve obj.method() using type info from constructor assignments.
+
+        If caller has `x = Foo()` tracked in local_types, and we see `x.bar()`,
+        resolve Foo through imports → try QualifiedFoo.bar in the registry.
+        """
+        if not call.receiver:
+            return None
+
+        base_receiver = call.receiver.split(".")[0]
+        type_name = caller.local_types.get(base_receiver)
+        if not type_name:
+            return None
+
+        # Resolve the type name through imports (same as resolving a function call)
+        type_base = type_name.split(".")[0]
+        if type_base in local_names:
+            type_qname = local_names[type_base]
+            # If type_name has dots (module.Foo), append the rest
+            if "." in type_name:
+                rest = type_name.split(".", 1)[1]
+                type_qname = f"{type_qname}.{rest}"
+        else:
+            # Try same-module class
+            type_qname = f"{module.module_path}.{type_name}"
+
+        # Now try type_qname.method_name
+        candidate = f"{type_qname}.{call.name}"
+        if candidate in self._function_registry:
+            return candidate
+
+        # Try without module prefix (type_name might already be qualified)
+        for qname in self._function_registry:
+            if qname.endswith(f".{type_name}.{call.name}"):
+                return qname
 
         return None
 

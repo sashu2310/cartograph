@@ -29,7 +29,33 @@ class _CallExtractor(ast.NodeVisitor):
     def __init__(self):
         self.calls: list[FunctionCall] = []
         self.branches: list[ConditionalBranch] = []
+        self.local_types: dict[str, str] = {}
         self._current_branch: ConditionalBranch | None = None
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        """Track variable types from constructor calls: x = Foo() → x: Foo."""
+        if (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+        ):
+            var_name = node.targets[0].id
+            call_func = node.value.func
+            if isinstance(call_func, ast.Name):
+                # x = Foo()
+                self.local_types[var_name] = call_func.id
+            elif isinstance(call_func, ast.Attribute) and isinstance(
+                call_func.value, ast.Name
+            ):
+                # x = module.Foo()
+                self.local_types[var_name] = f"{call_func.value.id}.{call_func.attr}"
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        """Track type annotations: x: Foo = ... → x: Foo."""
+        if isinstance(node.target, ast.Name) and isinstance(node.annotation, ast.Name):
+            self.local_types[node.target.id] = node.annotation.id
+        self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
         call = self._extract_call(node)
@@ -204,6 +230,7 @@ class _ModuleVisitor(ast.NodeVisitor):
                 branches=extractor.branches,
                 class_name=self._current_class,
                 module_path=self.module_path,
+                local_types=extractor.local_types,
             )
         )
 

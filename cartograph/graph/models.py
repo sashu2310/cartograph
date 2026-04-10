@@ -86,6 +86,7 @@ class ParsedFunction:
     module_path: str | None = None
     imports: dict[str, str] = field(default_factory=dict)
     annotations: dict = field(default_factory=dict)
+    local_types: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
