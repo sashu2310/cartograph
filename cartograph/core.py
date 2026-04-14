@@ -14,6 +14,8 @@ from cartograph.parser.languages.python.frameworks import (
     DjangoNinjaDetector,
     DjangoORMDetector,
     DjangoSignalDetector,
+    FastAPIDetector,
+    FlaskDetector,
 )
 from cartograph.parser.registry import FrameworkRegistry, LanguageRegistry
 
@@ -28,6 +30,8 @@ def build_registries() -> tuple[LanguageRegistry, FrameworkRegistry]:
     fw_registry.register("python", DjangoNinjaDetector())
     fw_registry.register("python", DjangoORMDetector())
     fw_registry.register("python", DjangoSignalDetector())
+    fw_registry.register("python", FastAPIDetector())
+    fw_registry.register("python", FlaskDetector())
 
     return lang_registry, fw_registry
 
