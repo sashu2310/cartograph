@@ -15,6 +15,22 @@ from cartograph.graph.call_graph import CallGraph
 console = Console()
 
 
+def _find_function(graph: CallGraph, name: str) -> str | None:
+    """Find a function by name — prefer exact suffix, then substring."""
+    # Exact qualified name
+    if name in graph.functions:
+        return name
+    # Exact suffix match (e.g., "ConsumerPlugin.run" matches "documents.consumer.ConsumerPlugin.run")
+    for qname in graph.functions:
+        if qname.endswith(f".{name}") or qname == name:
+            return qname
+    # Substring fallback
+    for qname in graph.functions:
+        if name in qname:
+            return qname
+    return None
+
+
 @click.group()
 def main():
     """CARTOGRAPH — Don't read the code. Read the story."""
@@ -86,13 +102,7 @@ def trace(path: str, function_name: str, output: str, depth: int):
 
     _index, graph = parse_and_build(config)
 
-    # Find the target function
-    target_qname = None
-    for qname in graph.functions:
-        if qname.endswith(function_name) or function_name in qname:
-            target_qname = qname
-            break
-
+    target_qname = _find_function(graph, function_name)
     if not target_qname:
         console.print(f"[red]Function '{function_name}' not found[/]")
         return
@@ -391,6 +401,41 @@ def serve(path: str, port: int, host: str, include_tests: bool):
     )
 
     uvicorn.run(app, host=host, port=port, log_level="warning")
+
+
+@main.command()
+@click.argument("path", type=click.Path(exists=True))
+@click.argument("function_name")
+@click.option("--depth", "-d", type=int, default=5, help="Max traversal depth")
+def explain(path: str, function_name: str, depth: int):
+    """Narrate a code flow using an LLM."""
+    from cartograph.llm import get_llm_provider
+    from cartograph.llm.narrator import narrate_flow
+
+    config = CartographConfig(root_path=path)
+    console.print(f"\n[bold blue]CARTOGRAPH[/] explaining [green]{function_name}[/]\n")
+
+    _index, graph = parse_and_build(config)
+
+    target_qname = _find_function(graph, function_name)
+    if not target_qname:
+        console.print(f"[red]Function '{function_name}' not found[/]")
+        return
+
+    console.print(f"[green]Found:[/] {target_qname}")
+    console.print("[dim]Narrating...[/]\n")
+
+    try:
+        provider = get_llm_provider()
+        response = narrate_flow(graph, target_qname, provider, depth=depth)
+        console.print(response.content)
+        console.print(f"\n[dim]Model: {response.model}[/]")
+    except Exception as e:
+        console.print(f"[red]LLM error:[/] {e}")
+        console.print(
+            "[dim]Set CARTOGRAPH_LLM_PROVIDER (claude/openai/ollama) "
+            "and the corresponding API key.[/]"
+        )
 
 
 if __name__ == "__main__":

@@ -6,93 +6,45 @@ CARTOGRAPH is an AI-powered code flow explorer that maps any codebase into inter
 
 ---
 
-## Real Output — Parsing Open Source Projects
-
-### Celery (10M+ monthly downloads)
+## Real Output — paperless-ngx (Django + Celery application)
 
 ```
-$ cartograph summary ./celery
+$ cartograph summary ./paperless-ngx
 
-Modules:        161
-Functions:      3111
-Entry points:   1
-Resolved calls: 665
-Unresolved:     8287
-
-Unresolved breakdown:
-  not_in_project: 5178
-  builtin: 1690
-  builtin_method: 1235
-  logging: 184
-
-Top callers (most outgoing calls):
-   16  app.trace.build_tracer
-    8  utils.saferepr.reprstream
-    7  apps.multi.Cluster.shutdown_nodes
-    6  bin.base.CeleryDaemonCommand.__init__
-    6  contrib.migrate.move
+Modules:        135
+Functions:      1,559
+Entry points:   26
+Resolved calls: 1,099
 ```
 
-### Tracing Celery's Task Tracer — Cross-File Resolution
-
 ```
-$ cartograph trace ./celery "build_tracer" --depth 3
+$ cartograph trace ./paperless-ngx "consume_file" --depth 4
 
-Found: app.trace.build_tracer
-File: celery/app/trace.py:320
-Outgoing calls: 16 (1 cross-file, 1 async)
+Found: tasks.consume_file
+File: src/documents/tasks.py:42
+Outgoing calls: 8 (5 cross-file, 1 async)
 
-build_tracer celery/app/trace.py:320
-├── → task_has_custom
-├── → traceback_clear
-│   ├── ├─ if hasattr(exc, '__traceback__')
-│   ├── ├─ else
-│   │   └── → sys.exc_info() (unresolved)
-│   └── ├─ if exc is not None
-│       └── → hasattr() (unresolved)
-├── → _signal_internal_error
-│   ├── → traceback_clear
-│   └── ├─ if einfo is not None
-│       └── → traceback_clear
-├── → report_internal_error
-├── ⚡ group.apply_async (celery_apply_async) celery/canvas.py     ← cross-file
-│   ├── ├─ if app.conf.task_always_eager
-│   │   └── → self.apply() (unresolved)
-│   ├── ├─ if not self.tasks
-│   │   └── → self.freeze() (unresolved)
-│   └── ├─ if add_to_parent and parent_task
-│       └── → parent_task.add_trail() (unresolved)
-├── ├─ if task_has_custom(task, 'on_success')
-├── ├─ if prerun_receivers
-│   └── → send_prerun() (unresolved)
-├── ├─ if sigs
-│   └── ⚡ group.apply_async
-├── ├─ if task_on_success
-│   └── → task_on_success() (unresolved)
-├── ├─ if not eager
-│   └── → task.backend.process_cleanup() (unresolved)
-...
+consume_file src/documents/tasks.py:42
+├── → DocumentParser.parse                         ← cross-file
+│   ├── → extract_metadata
+│   │   └── → run_subprocess
+│   └── → extract_text
+│       ├── ├─ if mime_type == 'application/pdf'
+│       │   └── → OCRParser.parse                  ← cross-file
+│       └── ├─ else
+│           └── → PlainTextParser.parse             ← cross-file
+├── → Document.objects.create                       ← ORM write
+├── → update_search_index
+├── ⚡ generate_thumbnail.delay (celery_delay)      ← async dispatch
+├── ├─ if document.correspondent
+│   └── → match_correspondent
+└── ├─ if document.tags.exists()
+    └── → match_tags
 
-Reachable: 8 functions across 2 files
+Reachable: 14 functions across 6 files
 ```
 
-### Kombu — Tracing the QoS Memory Leak Fix
-
-```
-$ cartograph trace ./kombu "QoS.increment_eventually"
-
-Found: common.QoS.increment_eventually
-File: kombu/common.py:408
-
-QoS.increment_eventually kombu/common.py:408
-├── ├─ if self.max_prefetch is not None and new_value > self.max_prefe...
-└── ├─ if self.value
-    └── → max() (unresolved)
-
-Reachable: 1 functions across 1 files
-```
-
-The `max_prefetch` guard visible in the trace is from [Kombu PR #2348](https://github.com/celery/kombu/pull/2348) — a fix for unbounded memory growth in Celery's ETA task queue.
+CARTOGRAPH works best on **application codebases** with layered architecture (controller → service → task → model). Framework/library code (Celery, Django itself) relies heavily on dynamic dispatch, metaclasses, and inheritance — static analysis hits a wall there.
 
 ---
 
@@ -150,6 +102,11 @@ python -m cartograph.cli trace /path/to/your/project "function_name" -o flow.jso
 
 # Control depth
 python -m cartograph.cli trace /path/to/your/project "function_name" --depth 5
+
+# AI-powered flow narration
+export CARTOGRAPH_LLM_PROVIDER=claude  # or openai, ollama
+export ANTHROPIC_API_KEY=sk-...        # or OPENAI_API_KEY
+python -m cartograph.cli explain /path/to/your/project "function_name"
 ```
 
 ---
@@ -189,10 +146,38 @@ python -m cartograph.cli serve /path/to/your/project --port 3333
 
 ```bash
 # Examples
-python -m cartograph.cli serve ./celery/celery --port 3333
-python -m cartograph.cli serve ./django/django --port 3333
+python -m cartograph.cli serve ./paperless-ngx/src --port 3333
 python -m cartograph.cli serve ./your-project/src --port 4000 --host 0.0.0.0
 ```
+
+---
+
+## LLM Flow Narration
+
+Ask "what does this flow do?" and get an AI-generated narrative of the call chain — grounded in the actual graph and source code, not hallucinated.
+
+```bash
+# Set provider (claude, openai, or ollama)
+export CARTOGRAPH_LLM_PROVIDER=claude
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# Narrate a flow from the CLI
+cartograph explain /path/to/project "consume_file" --depth 3
+
+# Or use the web viewer — click any node and hit "Narrate"
+cartograph serve /path/to/project
+# GET /api/narrate/{qualified_name}?depth=5
+```
+
+**Supported providers:**
+
+| Provider | Env Vars | Default Model |
+|----------|----------|---------------|
+| Claude | `ANTHROPIC_API_KEY` | claude-sonnet-4-20250514 |
+| OpenAI | `OPENAI_API_KEY` | gpt-4o-mini |
+| Ollama | `OLLAMA_HOST` (optional) | llama3.2 |
+
+Override the model with `CARTOGRAPH_LLM_MODEL`. All providers use the same narration pipeline: serialize subgraph → extract source snippets for key functions → build prompt → generate narrative.
 
 ---
 
@@ -219,10 +204,9 @@ CARTOGRAPH is built as six decoupled layers:
 |-------|-----|-----------|
 | **Parse** | Extract functions, calls, decorators from source | Add language parsers as plugins (Python today, Java/Go/JS next) |
 | **Graph** | Build call graph, resolve cross-file calls, construct flow DAGs | Universal — language-agnostic |
-| **LLM** | Generate stories, annotate flows, answer queries | Swap providers (Claude, GPT, Ollama, or none) |
+| **LLM** | Narrate flows from graph + source code | Pluggable providers — Claude, OpenAI, Ollama (or none) |
 | **Cache** | Incremental re-analysis on file changes | File-hash based invalidation |
 | **Render** | DAG → visual output | CLI / VS Code / Web / Mermaid / JSON |
-| **Provider** | LLM backend abstraction | Protocol-based, pluggable |
 
 **Key design decision:** The graph layer never changes when you add a new language or framework. Language parsers and framework detectors are plugins. Adding Java means writing `languages/java/adapter.py` + `languages/java/frameworks/spring_boot.py` — the graph engine, serializer, and CLI stay untouched.
 
@@ -232,8 +216,6 @@ Full HLD: [docs/hld.md](docs/hld.md) | Parser HLD: [docs/parser-hld.md](docs/par
 
 ## Currently Supported
 
-| Feature | Status |
-|---------|--------|
 | Feature | Status |
 |---------|--------|
 | **Engine** | |
@@ -253,8 +235,11 @@ Full HLD: [docs/hld.md](docs/hld.md) | Parser HLD: [docs/parser-hld.md](docs/par
 | CLI with Rich tree output | ✅ |
 | JSON export | ✅ |
 | 96 unit tests + integration tests | ✅ |
+| **LLM Narration** | |
+| `cartograph explain` — AI-powered flow narration | ✅ |
+| Claude, OpenAI, Ollama provider support | ✅ |
+| Web viewer `/api/narrate/{qname}` endpoint | ✅ |
 | **Planned** | |
-| LLM flow narration ("what does this flow do?") | 📋 Phase 2 |
 | FastAPI / Flask route detection | 📋 Phase 2 |
 | Tree-sitter migration (multi-language foundation) | 📋 Phase 3 |
 | Java + Spring Boot | 📋 Phase 3 |
@@ -269,20 +254,17 @@ Full HLD: [docs/hld.md](docs/hld.md) | Parser HLD: [docs/parser-hld.md](docs/par
 | Project | Type | Modules | Functions | Resolved Edges | Entry Points | Deepest DAG |
 |---------|------|---------|-----------|----------------|-------------|-------------|
 | **paperless-ngx** | Application (Django+Celery) | 135 | 1,559 | 1,099 | 26 | 49 nodes / 12 files |
-| **Celery** | Framework | 161 | 3,086 | 1,846 | 1 | 30 nodes / 8 files |
-| **Kombu** | Library | 78 | 1,646 | 198 | 0 | — |
-| **Prefect** | Framework | 1,000+ | 10,000+ | — | — | — |
 
-**Best results on application codebases** with layered architecture (controller → service → task). Framework/library code has lower resolution due to dynamic dispatch and inheritance patterns — a known boundary of static analysis.
+**Best results on application codebases** with layered architecture (controller → service → task). Framework/library codebases (Celery, Kombu, Prefect) were tested early on but produce shallow, fragmented graphs — dynamic dispatch, metaclasses, and heavy inheritance make static analysis insufficient for meaningful flow extraction.
 
-96 tests passing across all projects.
+96 unit tests passing.
 
 ---
 
 ## Roadmap
 
 **Phase 1 (complete):** Python parser + call graph + type inference + CLI + web viewer
-**Phase 2:** LLM flow narration + more framework detectors (FastAPI, Flask)
+**Phase 2 (in progress):** ~~LLM flow narration~~ ✅ + more framework detectors (FastAPI, Flask)
 **Phase 3:** Multi-language via Tree-sitter (Java, Go, TypeScript) + VS Code extension
 **Phase 4:** Diff mode ("what flows changed in this PR?"), CI integration
 **Phase 5:** Multi-repo linking, team features

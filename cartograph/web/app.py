@@ -1,5 +1,6 @@
 """CARTOGRAPH web viewer — FastAPI application."""
 
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, Query
@@ -15,11 +16,14 @@ from cartograph.web.serializers import (
     serialize_search,
 )
 
+logger = logging.getLogger(__name__)
+
 # Module-level state — populated by create_app()
 _graph: CallGraph | None = None
 _index: ProjectIndex | None = None
 _project_name: str = ""
 _entry_point_ids: set[str] = set()
+_llm_provider = None
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -30,11 +34,19 @@ def create_app(
     project_name: str,
 ) -> FastAPI:
     """Create the FastAPI app with graph data loaded in memory."""
-    global _graph, _index, _project_name, _entry_point_ids
+    global _graph, _index, _project_name, _entry_point_ids, _llm_provider
     _graph = graph
     _index = index
     _project_name = project_name
     _entry_point_ids = {ep.node_id for ep in index.entry_points}
+
+    # Try to initialize LLM provider (optional — works without it)
+    try:
+        from cartograph.llm import get_llm_provider
+
+        _llm_provider = get_llm_provider()
+    except Exception:
+        _llm_provider = None
 
     app = FastAPI(title=f"CARTOGRAPH — {project_name}")
 
@@ -73,5 +85,31 @@ def create_app(
         for r in result["results"]:
             r["is_entry_point"] = r["qualified_name"] in _entry_point_ids
         return result
+
+    @app.get("/api/narrate/{qname:path}")
+    async def narrate(qname: str, depth: int = Query(default=5, ge=1, le=10)):
+        if not _llm_provider:
+            return {
+                "error": "LLM not configured. Set CARTOGRAPH_LLM_PROVIDER and API key.",
+                "narrative": None,
+            }
+        if qname not in _graph.functions:
+            return {"error": f"Function '{qname}' not found", "narrative": None}
+        try:
+            from cartograph.llm.narrator import narrate_flow
+
+            response = narrate_flow(_graph, qname, _llm_provider, depth=depth)
+            return {
+                "narrative": response.content,
+                "model": response.model,
+                "usage": response.usage,
+            }
+        except Exception as e:
+            logger.exception(f"LLM narration failed for {qname}")
+            return {"error": str(e), "narrative": None}
+
+    @app.get("/api/llm-status")
+    async def llm_status():
+        return {"available": _llm_provider is not None}
 
     return app

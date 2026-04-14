@@ -349,6 +349,50 @@
     color: var(--text-dim);
   }
 
+  #explain-btn {
+    width: 100%;
+    padding: 8px;
+    margin-bottom: 12px;
+    background: var(--accent-blue);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  #explain-btn:hover { background: #2563eb; }
+  #explain-btn:disabled { background: var(--bg-hover); color: var(--text-dim); cursor: wait; }
+
+  #narration {
+    margin-bottom: 12px;
+    padding: 10px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text);
+    white-space: pre-wrap;
+  }
+
+  #narration .narration-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--accent-blue);
+    margin-bottom: 6px;
+  }
+
+  #narration .narration-meta {
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-top: 8px;
+  }
+
   /* Legend */
   .legend {
     position: absolute;
@@ -428,6 +472,8 @@
       <h3 id="detail-name"></h3>
       <span class="close-btn" id="detail-close">&times;</span>
     </div>
+    <button id="explain-btn" style="display:none">Explain this flow</button>
+    <div id="narration" style="display:none"></div>
     <div id="detail-content"></div>
   </div>
 
@@ -713,6 +759,20 @@ async function showDetail(qname, node) {
   d3.selectAll('.dag-node').classed('selected', false);
   d3.select(`.dag-node[data-qname="${qname}"]`).classed('selected', true);
 
+  // Explain button
+  const explainBtn = document.getElementById('explain-btn');
+  const narrationDiv = document.getElementById('narration');
+  narrationDiv.style.display = 'none';
+  narrationDiv.innerHTML = '';
+  if (llmAvailable) {
+    explainBtn.style.display = '';
+    explainBtn.disabled = false;
+    explainBtn.textContent = 'Explain this flow';
+    explainBtn.onclick = () => explainFlow(qname);
+  } else {
+    explainBtn.style.display = 'none';
+  }
+
   const content = document.getElementById('detail-content');
   let html = '';
 
@@ -851,6 +911,41 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// ─── LLM Narration ───────────────────────────────────────
+let llmAvailable = false;
+
+async function checkLLMStatus() {
+  try {
+    const data = await api('/api/llm-status');
+    llmAvailable = data.available;
+  } catch { llmAvailable = false; }
+}
+
+async function explainFlow(qname) {
+  const btn = document.getElementById('explain-btn');
+  const narrationDiv = document.getElementById('narration');
+
+  btn.disabled = true;
+  btn.textContent = 'Thinking...';
+  narrationDiv.style.display = '';
+  narrationDiv.innerHTML = '<div class="narration-label">Narrating...</div>';
+
+  try {
+    const data = await api(`/api/narrate/${encodeURIComponent(qname)}?depth=${depth}`);
+    if (data.error) {
+      narrationDiv.innerHTML = `<div class="narration-label">Error</div>${escapeHtml(data.error)}`;
+    } else {
+      const meta = data.model ? `<div class="narration-meta">${data.model}</div>` : '';
+      narrationDiv.innerHTML = `<div class="narration-label">Flow Narrative</div>${escapeHtml(data.narrative)}${meta}`;
+    }
+  } catch (e) {
+    narrationDiv.innerHTML = `<div class="narration-label">Error</div>${escapeHtml(e.message)}`;
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Explain this flow';
+}
+
 // ─── Helpers ─────────────────────────────────────────────
 function escapeHtml(text) {
   const div = document.createElement('div');
@@ -860,6 +955,7 @@ function escapeHtml(text) {
 
 // ─── Boot ────────────────────────────────────────────────
 init();
+checkLLMStatus();
 </script>
 </body>
 </html>
