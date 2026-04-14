@@ -230,17 +230,20 @@ Full HLD: [docs/hld.md](docs/hld.md) | Parser HLD: [docs/parser-hld.md](docs/par
 | Celery task + async dispatch (`.delay()`, `chain`, `chord`, `group`) | ✅ |
 | Django signal handler detection | ✅ |
 | Django ORM operation annotation | ✅ |
+| FastAPI route detection (`@app.get`, `@router.post`, `@app.websocket`) | ✅ |
+| Flask route detection (`@app.route`, `@bp.get`, `@app.errorhandler`) | ✅ |
 | **Interfaces** | |
 | Interactive web viewer (`cartograph serve`) | ✅ |
 | CLI with Rich tree output | ✅ |
 | JSON export | ✅ |
-| 96 unit tests + integration tests | ✅ |
+| 114 unit tests + integration tests | ✅ |
 | **LLM Narration** | |
 | `cartograph explain` — AI-powered flow narration | ✅ |
 | Claude, OpenAI, Ollama provider support | ✅ |
 | Web viewer `/api/narrate/{qname}` endpoint | ✅ |
 | **Planned** | |
-| FastAPI / Flask route detection | 📋 Phase 2 |
+| Polymorphic dispatch via type hints + subclass expansion | 📋 Phase 2 |
+| Diff mode ("what flows changed in this PR?") | 📋 Phase 2 |
 | Tree-sitter migration (multi-language foundation) | 📋 Phase 3 |
 | Java + Spring Boot | 📋 Phase 3 |
 | Go + goroutine boundary detection | 📋 Phase 3 |
@@ -257,16 +260,16 @@ Full HLD: [docs/hld.md](docs/hld.md) | Parser HLD: [docs/parser-hld.md](docs/par
 
 **Best results on application codebases** with layered architecture (controller → service → task). Framework/library codebases (Celery, Kombu, Prefect) were tested early on but produce shallow, fragmented graphs — dynamic dispatch, metaclasses, and heavy inheritance make static analysis insufficient for meaningful flow extraction.
 
-96 unit tests passing.
+114 unit tests passing.
 
 ---
 
 ## Roadmap
 
 **Phase 1 (complete):** Python parser + call graph + type inference + CLI + web viewer
-**Phase 2 (in progress):** ~~LLM flow narration~~ ✅ + more framework detectors (FastAPI, Flask)
+**Phase 2 (in progress):** ~~LLM flow narration~~ ✅ + ~~FastAPI/Flask detectors~~ ✅ + polymorphic dispatch + diff mode
 **Phase 3:** Multi-language via Tree-sitter (Java, Go, TypeScript) + VS Code extension
-**Phase 4:** Diff mode ("what flows changed in this PR?"), CI integration
+**Phase 4:** CI integration, PR flow impact analysis
 **Phase 5:** Multi-repo linking, team features
 
 ---
