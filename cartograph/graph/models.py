@@ -110,6 +110,7 @@ class ParsedModule:
     classes: list[str] = field(default_factory=list)
     imports: list[ParsedImport] = field(default_factory=list)
     file_hash: str | None = None
+    module_types: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

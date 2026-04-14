@@ -159,6 +159,31 @@ class CallGraphBuilder:
                     if func.name == imp.name or func.name.endswith(f".{imp.name}"):
                         return func.qualified_name
 
+        # Check if the imported name is a module-level instance
+        # e.g., "from x.service import user_service" where user_service = UserService()
+        # Resolve to the class so that user_service.method() → UserService.method
+        target_module = self._index.modules.get(base)
+        if target_module and imp.name in target_module.module_types:
+            type_name = target_module.module_types[imp.name]
+            type_base = type_name.split(".")[0]
+            # Resolve the type through the target module's own context
+            type_candidate = f"{base}.{type_name}"
+            if type_candidate in self._function_registry:
+                return type_candidate
+            # Type might be imported in the target module — check its imports
+            for target_imp in target_module.imports:
+                local = target_imp.alias or target_imp.name
+                if local == type_base:
+                    imp_qname = self._resolve_import_to_qualified_name(
+                        target_imp, target_module
+                    )
+                    if imp_qname:
+                        if "." in type_name:
+                            rest = type_name.split(".", 1)[1]
+                            imp_qname = f"{imp_qname}.{rest}"
+                        if imp_qname in self._function_registry:
+                            return imp_qname
+
         return None
 
     def _resolve_all_calls(self, graph: CallGraph) -> None:

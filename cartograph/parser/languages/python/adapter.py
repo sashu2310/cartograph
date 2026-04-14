@@ -142,6 +142,7 @@ class _ModuleVisitor(ast.NodeVisitor):
         self.functions: list[ParsedFunction] = []
         self.classes: list[str] = []
         self.imports: list[ParsedImport] = []
+        self.module_types: dict[str, str] = {}
         self._current_class: str | None = None
 
     def visit_Import(self, node: ast.Import) -> None:
@@ -166,6 +167,24 @@ class _ModuleVisitor(ast.NodeVisitor):
                     level=node.level,
                 )
             )
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        """Track module-level instance creation: x = Foo() → x: Foo."""
+        if self._current_class is not None:
+            return
+        if (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+        ):
+            var_name = node.targets[0].id
+            call_func = node.value.func
+            if isinstance(call_func, ast.Name):
+                self.module_types[var_name] = call_func.id
+            elif isinstance(call_func, ast.Attribute) and isinstance(
+                call_func.value, ast.Name
+            ):
+                self.module_types[var_name] = f"{call_func.value.id}.{call_func.attr}"
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self.classes.append(node.name)
@@ -317,6 +336,7 @@ class PythonAdapter:
                 classes=visitor.classes,
                 imports=visitor.imports,
                 file_hash=hashlib.md5(source.encode()).hexdigest(),
+                module_types=visitor.module_types,
             )
         except SyntaxError:
             return None
