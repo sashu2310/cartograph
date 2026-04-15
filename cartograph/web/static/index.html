@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CARTOGRAPH</title>
 <script src="https://d3js.org/d3.v7.min.js"></script>
-<script src="https://unpkg.com/@dagrejs/dagre@1.1.4/dist/dagre.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/elkjs@0.9.2/lib/elk.bundled.js"></script>
 <style>
   :root {
     --bg: #0f1117;
@@ -263,12 +263,35 @@
   .dag-edge.async path { stroke: var(--edge-async); stroke-dasharray: 6 3; }
   .dag-edge.cross-file path { stroke: var(--edge-cross); stroke-width: 2; }
 
+  .dag-node { cursor: grab; }
+  .dag-node.dragging { cursor: grabbing; }
+  .dag-node.dragging rect { stroke-width: 2.5; filter: brightness(1.2); }
+
   .dag-edge text {
     font-size: 10px;
     fill: var(--text-dim);
   }
 
+  .dag-edge .edge-condition {
+    font-size: 9px;
+    fill: var(--accent-amber);
+    font-style: italic;
+  }
+
   .dag-edge marker path { fill: var(--edge-sync); }
+
+  .branch-list { margin: 0; padding: 0; list-style: none; }
+  .branch-item {
+    padding: 4px 6px;
+    margin-bottom: 4px;
+    background: var(--bg);
+    border-left: 2px solid var(--accent-amber);
+    font-size: 11px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+  }
+  .branch-item .branch-condition { color: var(--accent-amber); }
+  .branch-item .branch-calls { color: var(--text-dim); font-size: 10px; }
+  .branch-item.branch-else { border-left-color: var(--text-dim); }
 
   /* Detail panel */
   #detail {
@@ -574,16 +597,34 @@ async function loadGraph(qname) {
 
   document.getElementById('empty-state').style.display = 'none';
   document.getElementById('legend').style.display = '';
-  renderDAG(currentGraph);
+  await renderDAG(currentGraph);
 }
 
-// ─── DAG Rendering ───────────────────────────────────────
-function renderDAG(data) {
+// ─── DAG Rendering (ELK.js) ─────────────────────────────
+const elk = new ELK();
+let _elkLayout = null; // store for drag updates
+
+function _displayName(name) {
+  let d = name;
+  if (d.length > 28 && d.includes('.')) {
+    const parts = d.split('.');
+    const method = parts[parts.length - 1];
+    const cls = parts.slice(0, -1).join('.');
+    const abbrev = cls.slice(0, 1) + '.' + method;
+    d = abbrev.length <= 28 ? abbrev : method;
+  }
+  return d.length > 28 ? d.slice(0, 26) + '..' : d;
+}
+
+function _estimateTextWidth(text, fontSize = 12) {
+  return text.length * (fontSize * 0.62) + 8;
+}
+
+async function renderDAG(data) {
   const svg = d3.select('#dag-svg');
   svg.selectAll('*').remove();
 
   const defs = svg.append('defs');
-  // Arrow markers
   ['sync', 'async', 'cross'].forEach(type => {
     const colors = { sync: 'var(--edge-sync)', async: 'var(--edge-async)', cross: 'var(--edge-cross)' };
     defs.append('marker')
@@ -597,122 +638,173 @@ function renderDAG(data) {
       .attr('fill', colors[type]);
   });
 
-  // Dagre layout
-  const g = new dagre.graphlib.Graph();
-  g.setGraph({ rankdir: 'TB', ranksep: 60, nodesep: 30, edgesep: 15, marginx: 40, marginy: 40 });
-  g.setDefaultEdgeLabel(() => ({}));
-
   const nodeEntries = Object.entries(data.nodes);
   if (nodeEntries.length === 0) return;
 
-  for (const [id, node] of nodeEntries) {
-    const labelLen = Math.min(node.name.length, 28);
-    const w = Math.max(labelLen * 8 + 32, 140);
-    g.setNode(id, { label: node.name, width: w, height: 36, ...node });
+  // Build ELK graph
+  const elkGraph = {
+    id: 'root',
+    layoutOptions: {
+      'elk.algorithm': 'layered',
+      'elk.direction': 'RIGHT',
+      'elk.layered.mergeEdges': 'false',
+      'elk.edgeRouting': 'SPLINES',
+      'elk.edgeLabels.placement': 'CENTER',
+      'elk.spacing.nodeNode': '30',
+      'elk.layered.spacing.nodeNodeBetweenLayers': '90',
+      'elk.spacing.edgeNode': '20',
+      'elk.spacing.edgeEdge': '15',
+      'elk.spacing.edgeLabel': '8',
+      'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX',
+    },
+    children: nodeEntries.map(([id, node]) => {
+      const label = _displayName(node.name);
+      const w = Math.max(_estimateTextWidth(label) + 32, 140);
+      return { id, width: w, height: 36, _data: node, _label: label };
+    }),
+    edges: data.edges
+      .filter(e => data.nodes[e.source] && data.nodes[e.target])
+      .map((e, i) => {
+        const labelText = e.condition
+          ? (e.condition.length > 35 ? e.condition.slice(0, 33) + '..' : e.condition)
+          : (e.type === 'async_dispatch' && e.async_type ? e.async_type.replace('celery_', '') : null);
+        const labels = labelText
+          ? [{ id: `el${i}`, text: labelText, width: _estimateTextWidth(labelText, 9), height: 14 }]
+          : [];
+        return { id: `e${i}`, sources: [e.source], targets: [e.target], labels, _data: e };
+      }),
+  };
+
+  // Run ELK layout
+  let layout;
+  try {
+    layout = await elk.layout(elkGraph);
+  } catch (err) {
+    console.error('ELK layout failed:', err);
+    return;
   }
+  _elkLayout = layout;
 
-  for (const edge of data.edges) {
-    if (data.nodes[edge.source] && data.nodes[edge.target]) {
-      g.setEdge(edge.source, edge.target, { ...edge });
-    }
-  }
+  // Build lookup maps
+  const nodeMap = {};
+  for (const child of layout.children) nodeMap[child.id] = child;
 
-  dagre.layout(g);
+  // Graph dimensions
+  const gWidth = layout.width || 800;
+  const gHeight = layout.height || 600;
 
-  // Get graph dimensions
-  const graphInfo = g.graph();
-  const gWidth = graphInfo.width || 800;
-  const gHeight = graphInfo.height || 600;
-
-  // Zoom behavior
+  // Zoom
   const container = svg.append('g').attr('class', 'zoom-container');
   const zoom = d3.zoom()
     .scaleExtent([0.1, 3])
     .on('zoom', e => container.attr('transform', e.transform));
   svg.call(zoom);
 
-  // Render edges
+  // ─── Render edges ───
   const edgeGroup = container.append('g').attr('class', 'edges');
-  g.edges().forEach(e => {
-    const edgeData = g.edge(e);
-    const points = edgeData.points;
-    if (!points || points.length === 0) return;
 
-    const isAsync = edgeData.type === 'async_dispatch';
-    const isCross = edgeData.is_cross_file;
+  for (const edge of layout.edges) {
+    const eData = edge._data || {};
+    const isAsync = eData.type === 'async_dispatch';
+    const isCross = eData.is_cross_file;
     const edgeClass = isAsync ? 'async' : isCross ? 'cross-file' : 'sync';
     const markerType = isAsync ? 'async' : isCross ? 'cross' : 'sync';
 
-    const line = d3.line().x(d => d.x).y(d => d.y).curve(d3.curveBasis);
+    const eg = edgeGroup.append('g')
+      .attr('class', `dag-edge ${edgeClass}`)
+      .attr('data-edge-id', edge.id);
 
-    const eg = edgeGroup.append('g').attr('class', `dag-edge ${edgeClass}`);
-    eg.append('path')
-      .attr('d', line(points))
-      .attr('marker-end', `url(#arrow-${markerType})`);
+    // Build path from sections
+    for (const sec of (edge.sections || [])) {
+      const pts = [sec.startPoint, ...(sec.bendPoints || []), sec.endPoint];
+      const line = d3.line().x(d => d.x).y(d => d.y).curve(d3.curveBasis);
+      eg.append('path')
+        .attr('d', line(pts))
+        .attr('marker-end', `url(#arrow-${markerType})`);
 
-    // Label for async edges
-    if (isAsync && edgeData.async_type) {
-      const mid = points[Math.floor(points.length / 2)];
-      eg.append('text')
-        .attr('x', mid.x + 4)
-        .attr('y', mid.y - 6)
-        .text(edgeData.async_type.replace('celery_', ''));
+      // Tooltip on edge hover
+      if (eData.condition) {
+        eg.append('title').text(eData.condition);
+      }
     }
-  });
 
-  // Render nodes
+    // Edge labels (positioned by ELK)
+    for (const label of (edge.labels || [])) {
+      if (label.x !== undefined) {
+        eg.append('text')
+          .attr('class', eData.condition ? 'edge-condition' : '')
+          .attr('x', label.x + (label.width || 0) / 2)
+          .attr('y', label.y + (label.height || 0) / 2 + 3)
+          .attr('text-anchor', 'middle')
+          .text(label.text);
+      }
+    }
+  }
+
+  // ─── Render nodes ───
   const nodeGroup = container.append('g').attr('class', 'nodes');
-  g.nodes().forEach(id => {
-    const node = g.node(id);
-    if (!node || node.x === undefined) return;
 
-    const { fill, stroke } = nodeColors(node);
+  for (const child of layout.children) {
+    const nodeData = child._data || {};
+    const { fill, stroke } = nodeColors(nodeData);
+
     const ng = nodeGroup.append('g')
       .attr('class', 'dag-node')
-      .attr('data-qname', id)
-      .attr('transform', `translate(${node.x - node.width / 2}, ${node.y - node.height / 2})`);
+      .attr('data-qname', child.id)
+      .datum(child)
+      .attr('transform', `translate(${child.x}, ${child.y})`);
 
     ng.append('rect')
-      .attr('width', node.width)
-      .attr('height', node.height)
+      .attr('width', child.width)
+      .attr('height', child.height)
       .attr('fill', fill)
       .attr('stroke', stroke)
       .attr('stroke-width', 1.5);
 
-    const displayName = node.label.length > 28 ? node.label.slice(0, 26) + '..' : node.label;
     ng.append('text')
-      .attr('x', node.expandable ? 14 : node.width / 2)
-      .attr('y', node.height / 2 + 4)
-      .attr('text-anchor', node.expandable ? 'start' : 'middle')
-      .text(displayName);
+      .attr('x', nodeData.expandable ? 14 : child.width / 2)
+      .attr('y', child.height / 2 + 4)
+      .attr('text-anchor', nodeData.expandable ? 'start' : 'middle')
+      .text(child._label);
 
-    // Expand button for nodes with hidden children
-    if (node.expandable) {
+    if (nodeData.expandable) {
       ng.append('text')
         .attr('class', 'expand-btn')
-        .attr('x', node.width - 18)
-        .attr('y', node.height / 2 + 5)
+        .attr('x', child.width - 18)
+        .attr('y', child.height / 2 + 5)
         .attr('text-anchor', 'middle')
         .text('+')
         .on('click', async (event) => {
           event.stopPropagation();
-          await expandNode(id);
+          await expandNode(child.id);
         });
     }
 
     // Click: show detail
-    ng.on('click', () => showDetail(id, node));
+    ng.on('click', () => showDetail(child.id, { ...nodeData, label: nodeData.name }));
 
     // Double-click: re-root
     ng.on('dblclick', () => {
-      currentQname = id;
-      loadGraph(id);
-      // Update sidebar selection
+      currentQname = child.id;
+      loadGraph(child.id);
       document.querySelectorAll('.ep-item.active').forEach(e => e.classList.remove('active'));
-      const sidebarItem = document.querySelector(`.ep-item[data-qname="${id}"]`);
+      const sidebarItem = document.querySelector(`.ep-item[data-qname="${child.id}"]`);
       if (sidebarItem) sidebarItem.classList.add('active');
     });
-  });
+  }
+
+  // ─── Draggable nodes ───
+  const drag = d3.drag()
+    .on('start', function() { d3.select(this).classed('dragging', true); })
+    .on('drag', function(event, d) {
+      d.x += event.dx;
+      d.y += event.dy;
+      d3.select(this).attr('transform', `translate(${d.x}, ${d.y})`);
+      _redrawEdges(container, layout);
+    })
+    .on('end', function() { d3.select(this).classed('dragging', false); });
+
+  nodeGroup.selectAll('.dag-node').call(drag);
 
   // Fit to viewport
   const svgEl = document.getElementById('dag-svg');
@@ -722,6 +814,36 @@ function renderDAG(data) {
   const tx = (svgW - gWidth * scale) / 2;
   const ty = (svgH - gHeight * scale) / 2;
   svg.call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+}
+
+function _redrawEdges(container, layout) {
+  // Rebuild node position lookup
+  const nodeMap = {};
+  for (const child of layout.children) nodeMap[child.id] = child;
+
+  container.selectAll('.dag-edge').each(function(_, i) {
+    const edge = layout.edges[i];
+    if (!edge) return;
+
+    const src = nodeMap[edge.sources[0]];
+    const tgt = nodeMap[edge.targets[0]];
+    if (!src || !tgt) return;
+
+    // Straight line from source right edge to target left edge
+    const sx = src.x + src.width;
+    const sy = src.y + src.height / 2;
+    const tx = tgt.x;
+    const ty = tgt.y + tgt.height / 2;
+    const mx = (sx + tx) / 2;
+
+    const path = `M ${sx} ${sy} C ${mx} ${sy}, ${mx} ${ty}, ${tx} ${ty}`;
+    d3.select(this).select('path').attr('d', path);
+
+    // Reposition label
+    d3.select(this).selectAll('text').each(function() {
+      d3.select(this).attr('x', mx).attr('y', (sy + ty) / 2 - 6);
+    });
+  });
 }
 
 function nodeColors(node) {
@@ -742,12 +864,12 @@ async function expandNode(qname) {
   Object.assign(currentGraph.nodes, subgraph.nodes);
   for (const edge of subgraph.edges) {
     const exists = currentGraph.edges.some(
-      e => e.source === edge.source && e.target === edge.target
+      e => e.source === edge.source && e.target === edge.target && e.line === edge.line
     );
     if (!exists) currentGraph.edges.push(edge);
   }
 
-  renderDAG(currentGraph);
+  await renderDAG(currentGraph);
 }
 
 // ─── Detail Panel ────────────────────────────────────────
@@ -807,6 +929,18 @@ async function showDetail(qname, node) {
     html += `</div>`;
   }
 
+  // Branches
+  if (node.branches && node.branches.length) {
+    html += `<div class="detail-section"><h4>Branches (${node.branches.length})</h4><ul class="branch-list">`;
+    for (const b of node.branches) {
+      const cls = b.is_else ? 'branch-item branch-else' : 'branch-item';
+      const cond = b.is_else ? 'else' : `if ${escapeHtml(b.condition || '?')}`;
+      const calls = b.calls.length ? ` → ${b.calls.join(', ')}` : '';
+      html += `<li class="${cls}"><span class="branch-condition">${cond}</span><span class="branch-calls">${calls}</span></li>`;
+    }
+    html += `</ul></div>`;
+  }
+
   // Callees (from current graph)
   const callees = currentGraph.edges.filter(e => e.source === qname);
   if (callees.length) {
@@ -816,7 +950,8 @@ async function showDetail(qname, node) {
       const name = targetNode ? targetNode.name : e.target.split('.').pop();
       const asyncLabel = e.type === 'async_dispatch' ? ' <span style="color:var(--accent-purple)">[async]</span>' : '';
       const crossLabel = e.is_cross_file ? ' <span style="color:var(--accent-amber)">[cross-file]</span>' : '';
-      html += `<div class="callee-item" data-qname="${e.target}">${name}${asyncLabel}${crossLabel}</div>`;
+      const condLabel = e.condition ? ` <span style="color:var(--accent-amber)">[${escapeHtml(e.condition.length > 30 ? e.condition.slice(0, 28) + '..' : e.condition)}]</span>` : '';
+      html += `<div class="callee-item" data-qname="${e.target}">${name}${asyncLabel}${crossLabel}${condLabel}</div>`;
     }
     html += `</div>`;
   }

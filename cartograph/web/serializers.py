@@ -48,6 +48,17 @@ def serialize_graph_trace(graph: CallGraph, root_qname: str, depth: int) -> dict
             return
         func = graph.functions.get(qname)
         if func:
+            branches = []
+            for b in func.branches:
+                branch_calls = [c.name for c in b.calls]
+                branches.append(
+                    {
+                        "condition": b.condition,
+                        "line": b.line,
+                        "calls": branch_calls,
+                        "is_else": b.is_else,
+                    }
+                )
             nodes[qname] = {
                 "name": func.name,
                 "qualified_name": func.qualified_name,
@@ -59,6 +70,7 @@ def serialize_graph_trace(graph: CallGraph, root_qname: str, depth: int) -> dict
                 "docstring": func.docstring,
                 "annotations": func.annotations,
                 "has_callees": len(graph.get_callees(qname)) > 0,
+                "branches": branches,
             }
 
     def _walk(qname: str, d: int):
@@ -82,6 +94,7 @@ def serialize_graph_trace(graph: CallGraph, root_qname: str, depth: int) -> dict
                     else None,
                     "is_cross_file": edge.is_cross_file,
                     "line": edge.call.line,
+                    "condition": edge.condition,
                 }
             )
             _walk(edge.callee, d - 1)

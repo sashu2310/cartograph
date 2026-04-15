@@ -23,6 +23,7 @@ class CallEdge:
     callee: str
     call: FunctionCall
     is_cross_file: bool = False
+    condition: str | None = None
 
 
 @dataclass
@@ -202,31 +203,53 @@ class CallGraphBuilder:
         graph: CallGraph,
     ) -> None:
         """Resolve all calls within a single function."""
-        all_calls = list(func.calls)
+        # Top-level calls (not inside any branch)
+        for call in func.calls:
+            self._resolve_and_add(
+                call, func, module, local_names, graph, condition=None
+            )
+
+        # Branch calls — preserve the condition context
         for branch in func.branches:
-            all_calls.extend(branch.calls)
-
-        for call in all_calls:
-            resolved = self._resolve_single_call(call, func, module, local_names)
-
-            if resolved:
-                is_cross_file = not resolved.startswith(module.module_path + ".")
-                graph.edges.append(
-                    CallEdge(
-                        caller=func.qualified_name,
-                        callee=resolved,
-                        call=call,
-                        is_cross_file=is_cross_file,
-                    )
+            condition = branch.condition
+            if branch.is_else:
+                condition = "else"
+            for call in branch.calls:
+                self._resolve_and_add(
+                    call, func, module, local_names, graph, condition=condition
                 )
-            else:
-                graph.unresolved.append(
-                    UnresolvedCall(
-                        caller=func.qualified_name,
-                        call=call,
-                        reason=self._guess_unresolved_reason(call),
-                    )
+
+    def _resolve_and_add(
+        self,
+        call: FunctionCall,
+        func: ParsedFunction,
+        module: ParsedModule,
+        local_names: dict[str, str],
+        graph: CallGraph,
+        condition: str | None,
+    ) -> None:
+        """Resolve a single call and add it to the graph."""
+        resolved = self._resolve_single_call(call, func, module, local_names)
+
+        if resolved:
+            is_cross_file = not resolved.startswith(module.module_path + ".")
+            graph.edges.append(
+                CallEdge(
+                    caller=func.qualified_name,
+                    callee=resolved,
+                    call=call,
+                    is_cross_file=is_cross_file,
+                    condition=condition,
                 )
+            )
+        else:
+            graph.unresolved.append(
+                UnresolvedCall(
+                    caller=func.qualified_name,
+                    call=call,
+                    reason=self._guess_unresolved_reason(call),
+                )
+            )
 
     def _resolve_single_call(
         self,
