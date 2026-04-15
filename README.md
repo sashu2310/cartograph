@@ -6,45 +6,114 @@ CARTOGRAPH is an AI-powered code flow explorer that maps any codebase into inter
 
 ---
 
-## Real Output — paperless-ngx (Django + Celery application)
+## Real Output — Parsing Open Source Projects
+
+### Polar (FastAPI — billing/subscriptions platform)
 
 ```
-$ cartograph summary ./paperless-ngx
+$ cartograph summary ./polar/server
+
+Modules:        914
+Functions:      6,350
+Entry points:   328
+Resolved calls: 5,572
+Unresolved:     23,441
+
+Top callers (most outgoing calls):
+   59  scripts.seeds_load.create_seed_data
+   43  polar.backoffice.organizations_v2.endpoints.get_organization_detail
+   33  polar.checkout.service.CheckoutService.create
+```
+
+```
+$ cartograph trace ./polar/server "get_claim_info" --depth 2
+
+Found: polar.customer_seat.endpoints.get_claim_info
+File: polar/customer_seat/endpoints.py:323
+Decorators: router.get
+Outgoing calls: 6 (6 cross-file, 0 async)
+
+get_claim_info polar/customer_seat/endpoints.py:323
+├── → SeatService.get_seat_by_token polar/customer_seat/service.py
+│   ├── ├─ if not seat or seat.is_revoked() or seat.is_claimed()
+│   └── ├─ if seat.invitation_token_expires_at and seat.invitation_token_e...
+├── → SeatService.check_seat_feature_enabled polar/customer_seat/service.py
+│   ├── → FeatureNotEnabled
+│   ├── ├─ if not organization
+│   │   └── → FeatureNotEnabled
+│   └── ├─ if not organization.feature_settings.get('seat_based_pricing_en...
+│       └── → FeatureNotEnabled
+├── → SeatClaimInfo polar/customer_seat/schemas.py
+├── → ResourceNotFound server/polar/exceptions.py
+├── ├─ if not seat
+│   └── → ResourceNotFound
+├── ├─ if seat.subscription
+├── ├─ else
+│   └── → ResourceNotFound
+├── ├─ if not organization
+│   └── → ResourceNotFound
+├── ├─ if seat.email
+├── ├─ if seat.member
+└── ├─ else
+
+Reachable: 5 functions across 4 files
+```
+
+### paperless-ngx (Django + Celery — document management)
+
+```
+$ cartograph summary ./paperless-ngx/src
 
 Modules:        135
 Functions:      1,559
-Entry points:   26
+Entry points:   26 (Celery tasks, signal handlers, API routes)
 Resolved calls: 1,099
 ```
 
 ```
-$ cartograph trace ./paperless-ngx "consume_file" --depth 4
+$ cartograph trace ./paperless-ngx/src "send_webhook" --depth 3
 
-Found: tasks.consume_file
-File: src/documents/tasks.py:42
-Outgoing calls: 8 (5 cross-file, 1 async)
+Found: documents.workflows.webhooks.send_webhook
+File: documents/workflows/webhooks.py:77
+Decorators: shared_task
+Outgoing calls: 2 (1 cross-file, 0 async)
 
-consume_file src/documents/tasks.py:42
-├── → DocumentParser.parse                         ← cross-file
-│   ├── → extract_metadata
-│   │   └── → run_subprocess
-│   └── → extract_text
-│       ├── ├─ if mime_type == 'application/pdf'
-│       │   └── → OCRParser.parse                  ← cross-file
-│       └── ├─ else
-│           └── → PlainTextParser.parse             ← cross-file
-├── → Document.objects.create                       ← ORM write
-├── → update_search_index
-├── ⚡ generate_thumbnail.delay (celery_delay)      ← async dispatch
-├── ├─ if document.correspondent
-│   └── → match_correspondent
-└── ├─ if document.tags.exists()
-    └── → match_tags
+send_webhook documents/workflows/webhooks.py:77
+├── → validate_outbound_http_url paperless/network.py
+│   ├── → resolve_hostname_ips
+│   │   └── ├─ if not ips
+│   │       └── → ValueError()
+│   ├── → is_public_ip
+│   ├── ├─ if scheme not in allowed_schemes or not parsed.hostname
+│   │   └── → ValueError()
+│   ├── ├─ if allowed_ports and port not in allowed_ports
+│   │   └── → ValueError()
+│   ├── ├─ if not is_public_ip(ip_str)
+│   │   └── → ValueError()
+│   └── ├─ if not allow_internal
+│       ├── → resolve_hostname_ips
+│       └── → is_public_ip
+├── → WebhookTransport
+├── ├─ if hostname is None
+│   └── → ValueError()
+├── ├─ if as_json
+└── ├─ else
 
-Reachable: 14 functions across 6 files
+Reachable: 5 functions across 2 files
 ```
 
-CARTOGRAPH works best on **application codebases** with layered architecture (controller → service → task → model). Framework/library code (Celery, Django itself) relies heavily on dynamic dispatch, metaclasses, and inheritance — static analysis hits a wall there.
+### Redash (Flask — data visualization)
+
+```
+$ cartograph summary ./redash/redash
+
+Modules:        168
+Functions:      1,691
+Entry points:   24
+Resolved calls: 635
+```
+
+CARTOGRAPH works best on **application codebases** with layered architecture (controller → service → task → model). Resolution is highest on codebases that use explicit service imports (like Polar's `from .service import user_service` pattern). Framework/library code with heavy dynamic dispatch produces lower resolution — a known boundary of static analysis.
 
 ---
 
@@ -146,7 +215,8 @@ python -m cartograph.cli serve /path/to/your/project --port 3333
 
 ```bash
 # Examples
-python -m cartograph.cli serve ./paperless-ngx/src --port 3333
+python -m cartograph.cli serve ./polar/server --port 3333        # 328 FastAPI routes
+python -m cartograph.cli serve ./paperless-ngx/src --port 3333   # Django + Celery
 python -m cartograph.cli serve ./your-project/src --port 4000 --host 0.0.0.0
 ```
 
@@ -254,13 +324,13 @@ Full HLD: [docs/hld.md](docs/hld.md) | Parser HLD: [docs/parser-hld.md](docs/par
 
 ## Tested Against
 
-| Project | Type | Modules | Functions | Resolved Edges | Entry Points | Deepest DAG |
-|---------|------|---------|-----------|----------------|-------------|-------------|
-| **paperless-ngx** | Application (Django+Celery) | 135 | 1,559 | 1,099 | 26 | 49 nodes / 12 files |
+| Project | Framework | Modules | Functions | Resolved Edges | Entry Points |
+|---------|-----------|---------|-----------|----------------|--------------|
+| **Polar** | FastAPI | 914 | 6,350 | 5,572 | 328 |
+| **paperless-ngx** | Django + Celery | 135 | 1,559 | 1,099 | 26 |
+| **Redash** | Flask | 168 | 1,691 | 635 | 24 |
 
-**Best results on application codebases** with layered architecture (controller → service → task). Framework/library codebases (Celery, Kombu, Prefect) were tested early on but produce shallow, fragmented graphs — dynamic dispatch, metaclasses, and heavy inheritance make static analysis insufficient for meaningful flow extraction.
-
-114 unit tests passing.
+122 unit tests passing.
 
 ---
 
