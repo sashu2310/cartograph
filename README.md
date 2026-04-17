@@ -1,8 +1,18 @@
 # CARTOGRAPH
 
-**Don't read the code. Read the story.**
+**Scan any Python codebase. See every flow. Pipe to Claude.**
 
-CARTOGRAPH is an AI-powered code flow explorer that maps any codebase into interactive DAGs — tracing every call chain across files, detecting async boundaries, narrating what each flow does, and rendering the result in your browser. Language-agnostic engine, pluggable framework detectors. Python shipped, more languages next.
+Cartograph is a static analysis tool that maps codebases into navigable flows — entry points, call chains, conditional branches, cross-file dependencies. It discovers entry points from graph topology (not hardcoded decorators), builds a type-aware call graph, and outputs structured context that reduces LLM token usage by 100-280x.
+
+```bash
+pip install cartograph
+
+carto scan ./your-project             # scan once, cached after
+carto entries                         # list all entry points
+carto trace "checkout"                # trace a call tree
+carto context | claude                # pipe to any LLM
+carto context "deploy" | claude       # scoped flow context
+```
 
 ---
 
@@ -129,34 +139,30 @@ You Cmd+Click through function calls. You grep. You read 10 files to understand 
 ## Quick Start
 
 ```bash
-# Clone
-git clone https://github.com/sashu2310/cartograph.git
-cd cartograph
+# Install
+pip install cartograph
 
-# Setup
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+# Scan any Python project (first time parses everything, then cached)
+carto scan /path/to/your/project
 
-# Scan a codebase
-python -m cartograph.cli init /path/to/your/project
+# Everything below uses the cache — instant, no path needed
+carto entries                          # list all entry points
+carto entries --type api_route         # filter by type
+carto search "checkout"                # find functions by name
+carto trace "CheckoutService.create"   # trace call tree
+carto trace "send_webhook" --depth 5   # control depth
+carto callers "UserService.create"     # who calls this?
+carto summary                          # stats overview
 
-# Summary with call graph stats
-python -m cartograph.cli summary /path/to/your/project
+# Pipe to any LLM — no API keys needed
+carto context | claude "what does this codebase do"
+carto context "deploy" | claude "explain the deploy flow"
+carto context "checkout" | gh copilot explain
 
-# Trace a specific function
-python -m cartograph.cli trace /path/to/your/project "function_name"
-
-# Trace with JSON output
-python -m cartograph.cli trace /path/to/your/project "function_name" -o flow.json
-
-# Control depth
-python -m cartograph.cli trace /path/to/your/project "function_name" --depth 5
-
-# AI-powered flow narration
-export CARTOGRAPH_LLM_PROVIDER=claude  # or openai, ollama
-export ANTHROPIC_API_KEY=sk-...        # or OPENAI_API_KEY
-python -m cartograph.cli explain /path/to/your/project "function_name"
+# Or use built-in LLM (needs API key or local Ollama)
+export CARTOGRAPH_LLM_PROVIDER=ollama
+carto explain                          # explain whole codebase
+carto explain "checkout"               # explain specific flow
 ```
 
 ---
@@ -166,15 +172,10 @@ python -m cartograph.cli explain /path/to/your/project "function_name"
 Launch an interactive browser-based DAG explorer for any Python project:
 
 ```bash
-# Make sure you're in the cartograph directory with venv active
-cd cartograph
-source .venv/bin/activate
+# Launch the web viewer
+carto serve /path/to/your/project --port 3333
 
-# Launch the web viewer against any Python project
-python -m cartograph.cli serve /path/to/your/project --port 3333
-
-# Open in browser
-# http://127.0.0.1:3333
+# Open in browser: http://127.0.0.1:3333
 ```
 
 **What happens:**
@@ -196,39 +197,38 @@ python -m cartograph.cli serve /path/to/your/project --port 3333
 
 ```bash
 # Examples
-python -m cartograph.cli serve ./polar/server --port 3333        # 328 FastAPI routes
-python -m cartograph.cli serve ./paperless-ngx/src --port 3333   # Django + Celery
-python -m cartograph.cli serve ./your-project/src --port 4000 --host 0.0.0.0
+carto serve ./polar/server --port 3333         # 600 entry points
+carto serve ./sentry/src --port 3333           # 788 entry points
+carto serve ./your-project --port 4000 --host 0.0.0.0
 ```
 
 ---
 
-## LLM Flow Narration
+## Pipe to Any LLM
 
-Ask "what does this flow do?" and get an AI-generated narrative of the call chain — grounded in the actual graph and source code, not hallucinated.
+Cartograph outputs structured context that any LLM can consume. No API keys, no provider lock-in — pipe to whatever you already use.
 
 ```bash
-# Set provider (claude, openai, or ollama)
-export CARTOGRAPH_LLM_PROVIDER=claude
-export ANTHROPIC_API_KEY=sk-ant-...
+# Codebase-level: "what is this project?"
+carto context | claude "what does this codebase do"
 
-# Narrate a flow from the CLI
-cartograph explain /path/to/project "consume_file" --depth 3
+# Scoped: "explain this specific flow"
+carto context "deploy" | claude "explain the deploy flow step by step"
 
-# Or use the web viewer — click any node and hit "Narrate"
-cartograph serve /path/to/project
-# GET /api/narrate/{qualified_name}?depth=5
+# Works with any LLM CLI
+carto context "checkout" | gh copilot explain
+carto context | llm "summarize the architecture"
 ```
 
-**Supported providers:**
+**Token reduction:** Prefect's raw codebase is ~9M tokens. `carto context` outputs ~8K tokens — a **1,000x reduction** — while preserving every entry point, domain grouping, top callers, and package structure. The LLM gets the map, not the territory.
+
+**Built-in LLM support** (optional — for `carto explain` without piping):
 
 | Provider | Env Vars | Default Model |
 |----------|----------|---------------|
 | Claude | `ANTHROPIC_API_KEY` | claude-sonnet-4-20250514 |
 | OpenAI | `OPENAI_API_KEY` | gpt-4o-mini |
 | Ollama | `OLLAMA_HOST` (optional) | llama3.2 |
-
-Override the model with `CARTOGRAPH_LLM_MODEL`. All providers use the same narration pipeline: serialize subgraph → extract source snippets for key functions → build prompt → generate narrative.
 
 ---
 
@@ -336,21 +336,21 @@ Sentry and Dagster use entirely custom decorator patterns — no Cartograph-spec
 
 You can ask Claude Code or Cursor to "trace the equipment pipeline." It will read some files, pattern-match, and give you a plausible answer. But:
 
-- **LLMs sample. CARTOGRAPH enumerates.** An LLM reads files until it runs out of context. CARTOGRAPH parses every file, resolves every import, builds the complete graph. 3000 functions in 2 seconds — exhaustive, not best-effort.
-- **LLMs hallucinate edges. CARTOGRAPH proves them.** An LLM might say A calls B when it actually calls C. CARTOGRAPH resolves calls through the import chain — if it says A→B, that edge exists in the source.
-- **LLMs produce text. CARTOGRAPH produces structure.** A JSON graph with nodes and edges feeds into VS Code extensions, CI pipelines, diff tools. Prose doesn't.
-- **LLMs forget. CARTOGRAPH is deterministic.** Same codebase, same graph, every time.
+- **LLMs sample. Cartograph enumerates.** An LLM reads files until it runs out of context. Cartograph parses every file, resolves every import, builds the complete graph. 30K functions in 3 seconds — exhaustive, not best-effort.
+- **LLMs hallucinate edges. Cartograph proves them.** An LLM might say A calls B when it actually calls C. Cartograph resolves calls through the import chain — if it says A→B, that edge exists in the source.
+- **LLMs need context. Cartograph provides it.** Instead of feeding 9M tokens of raw code to an LLM, pipe 8K tokens of structured context: `carto context | claude`. The LLM gets the map — every entry point, every domain, every flow — in one page.
+- **LLMs forget. Cartograph is deterministic.** Same codebase, same graph, every time.
 
-CARTOGRAPH builds the map. The LLM narrates it. They're complementary — the exhaustive structural graph is what makes AI narration trustworthy instead of guesswork.
+Cartograph builds the map. The LLM narrates it. They're complementary — `carto context | claude` gives your LLM grounded, exhaustive structural knowledge instead of best-effort file sampling.
 
 ## Comparison
 
-| Tool | What it does | Where CARTOGRAPH differs |
+| Tool | What it does | Where Cartograph differs |
 |------|-------------|------------------------|
 | VS Code Call Hierarchy | Shows callers/callees of one function | No cross-file DAG, no async detection, no branches |
-| Sourcegraph | Code search and navigation | Finds code, doesn't explain flows |
-| CodeSee (dead) | Runtime code flow visualization | Required instrumentation. CARTOGRAPH is static — no setup |
-| Claude Code / Cursor | LLM reads files and explains | Probabilistic, partial, no structured output. CARTOGRAPH is exhaustive and deterministic |
+| Sourcegraph | Code search and navigation | Finds code, doesn't map flows |
+| Claude Code / Cursor | LLM reads files and explains | Probabilistic, partial. Cartograph is exhaustive and deterministic — then feeds the LLM |
+| GraphRAG / text-to-graph | Compresses text into graph for LLM context | Cartograph parses actual code structure, not text. Edges are proven, not inferred |
 
 ---
 
@@ -360,4 +360,4 @@ MIT
 
 ---
 
-*The art of making maps for uncharted codebases.*
+*LLMs guess. Cartograph proves.*
