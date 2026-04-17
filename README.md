@@ -8,6 +8,19 @@ CARTOGRAPH is an AI-powered code flow explorer that maps any codebase into inter
 
 ## Real Output — Parsing Open Source Projects
 
+### Sentry (Django + Celery — 40K stars, custom framework abstractions)
+
+```
+$ cartograph summary ./sentry/src
+
+Modules:        4,415
+Functions:      30,926
+Entry points:   788 (52 via detectors + 736 topology-discovered)
+Resolved calls: 37,659
+```
+
+Sentry uses custom decorators (`@instrumented_task`, `@cell_silo_endpoint`) that no static analyzer knows about. Cartograph's topology-based discovery finds them anyway — **788 entry points without a single line of Sentry-specific code.**
+
 ### Polar (FastAPI — billing/subscriptions platform)
 
 ```
@@ -15,14 +28,8 @@ $ cartograph summary ./polar/server
 
 Modules:        914
 Functions:      6,350
-Entry points:   328
-Resolved calls: 5,572
-Unresolved:     23,441
-
-Top callers (most outgoing calls):
-   59  scripts.seeds_load.create_seed_data
-   43  polar.backoffice.organizations_v2.endpoints.get_organization_detail
-   33  polar.checkout.service.CheckoutService.create
+Entry points:   600
+Resolved calls: 6,327
 ```
 
 ```
@@ -30,90 +37,64 @@ $ cartograph trace ./polar/server "get_claim_info" --depth 2
 
 Found: polar.customer_seat.endpoints.get_claim_info
 File: polar/customer_seat/endpoints.py:323
-Decorators: router.get
-Outgoing calls: 6 (6 cross-file, 0 async)
+Outgoing calls: 7 (7 cross-file, 0 async)
 
 get_claim_info polar/customer_seat/endpoints.py:323
 ├── → SeatService.get_seat_by_token polar/customer_seat/service.py
+│   ├── → CustomerSeatRepository.get_by_invitation_token polar/customer_seat/repository.py
+│   ├── → CustomerSeatRepository.get_eager_options polar/customer_seat/repository.py
 │   ├── ├─ if not seat or seat.is_revoked() or seat.is_claimed()
 │   └── ├─ if seat.invitation_token_expires_at and seat.invitation_token_e...
 ├── → SeatService.check_seat_feature_enabled polar/customer_seat/service.py
+│   ├── → OrganizationRepository.get_by_id polar/organization/repository.py
 │   ├── → FeatureNotEnabled
 │   ├── ├─ if not organization
 │   │   └── → FeatureNotEnabled
 │   └── ├─ if not organization.feature_settings.get('seat_based_pricing_en...
 │       └── → FeatureNotEnabled
-├── → SeatClaimInfo polar/customer_seat/schemas.py
-├── → ResourceNotFound server/polar/exceptions.py
-├── ├─ if not seat
-│   └── → ResourceNotFound
-├── ├─ if seat.subscription
-├── ├─ else
-│   └── → ResourceNotFound
-├── ├─ if not organization
-│   └── → ResourceNotFound
-├── ├─ if seat.email
-├── ├─ if seat.member
-└── ├─ else
+├── → OrganizationRepository.get_by_id polar/organization/repository.py
+├── → SeatClaimInfo, → ResourceNotFound (×3, conditional)
+├── ├─ if not seat → ResourceNotFound
+├── ├─ else → ResourceNotFound (no subscription/order)
+├── ├─ if not organization → ResourceNotFound
+└── ├─ if seat.email / elif seat.member / elif seat.customer
 
-Reachable: 5 functions across 4 files
+Reachable: 6 functions across 5 files
 ```
 
-### paperless-ngx (Django + Celery — document management)
+### Dagster (orchestration framework — 12K stars, zero framework detectors)
 
 ```
-$ cartograph summary ./paperless-ngx/src
+$ cartograph summary ./dagster/python_modules/dagster/dagster
 
-Modules:        135
-Functions:      1,559
-Entry points:   26 (Celery tasks, signal handlers, API routes)
-Resolved calls: 1,099
+Modules:        790
+Functions:      11,533
+Entry points:   255 (all topology-discovered: @public, @schedule_cli.command, @job_cli.command...)
+Resolved calls: 6,919
 ```
 
-```
-$ cartograph trace ./paperless-ngx/src "send_webhook" --depth 3
+Zero Dagster-specific code in Cartograph. Every entry point found via graph topology.
 
-Found: documents.workflows.webhooks.send_webhook
-File: documents/workflows/webhooks.py:77
-Decorators: shared_task
-Outgoing calls: 2 (1 cross-file, 0 async)
-
-send_webhook documents/workflows/webhooks.py:77
-├── → validate_outbound_http_url paperless/network.py
-│   ├── → resolve_hostname_ips
-│   │   └── ├─ if not ips
-│   │       └── → ValueError()
-│   ├── → is_public_ip
-│   ├── ├─ if scheme not in allowed_schemes or not parsed.hostname
-│   │   └── → ValueError()
-│   ├── ├─ if allowed_ports and port not in allowed_ports
-│   │   └── → ValueError()
-│   ├── ├─ if not is_public_ip(ip_str)
-│   │   └── → ValueError()
-│   └── ├─ if not allow_internal
-│       ├── → resolve_hostname_ips
-│       └── → is_public_ip
-├── → WebhookTransport
-├── ├─ if hostname is None
-│   └── → ValueError()
-├── ├─ if as_json
-└── ├─ else
-
-Reachable: 5 functions across 2 files
-```
-
-### Redash (Flask — data visualization)
+### Prefect (orchestration framework — 20K stars)
 
 ```
-$ cartograph summary ./redash/redash
+$ cartograph summary ./prefect/src/prefect
 
-Modules:        168
-Functions:      1,691
-Entry points:   24
-Resolved calls: 635
+Modules:        690
+Functions:      6,280
+Entry points:   396 (183 FastAPI routes + 213 topology-discovered)
+Resolved calls: 2,821
 ```
 
-CARTOGRAPH works best on **application codebases** with layered architecture (controller → service → task → model). Resolution is highest on codebases that use explicit service imports (like Polar's `from .service import user_service` pattern). Framework/library code with heavy dynamic dispatch produces lower resolution — a known boundary of static analysis.
+### How Entry Point Discovery Works
+
+Cartograph discovers entry points two ways:
+
+1. **Framework detectors** — recognize `@app.get`, `@shared_task`, `@receiver`, etc. Produce rich labels ("GET /api/users", "Celery task: send_email").
+
+2. **Topology discovery** — after the call graph is built, find functions with zero incoming edges + outgoing calls + a decorator. These are functions the framework calls but no project code calls. **Works on any framework without configuration.**
+
+Framework detectors are optional enrichment. Topology does the heavy lifting.
 
 ---
 
@@ -137,8 +118,8 @@ You Cmd+Click through function calls. You grep. You read 10 files to understand 
 
 ## What It Does
 
-- **Scans** any codebase and discovers entry points (API routes, async tasks, signal handlers — via pluggable framework detectors)
-- **Builds** a global call graph with cross-file import resolution and type-inferred method resolution
+- **Scans** any codebase and discovers entry points — via framework detectors (FastAPI, Flask, Django, Celery) AND framework-agnostic topology discovery (works on any framework without configuration)
+- **Builds** a global call graph with cross-file import resolution, parameter type inference, factory classmethod tracking, MRO walking, and return type inference
 - **Traces** code flows from any function as a DAG with branch detection and async boundary marking
 - **Renders** interactive DAGs in the browser — click, expand, search, zoom across your entire codebase
 - **Exports** to JSON for downstream consumption (VS Code extension, CI pipelines)
@@ -291,7 +272,11 @@ Full HLD: [docs/hld.md](docs/hld.md) | Parser HLD: [docs/parser-hld.md](docs/par
 | **Engine** | |
 | Cross-file call resolution via import analysis | ✅ |
 | Type-inferred method resolution (`x = Foo(); x.bar()`) | ✅ |
-| `self.method()` resolution within classes | ✅ |
+| Factory classmethod resolution (`x = Foo.create(); x.bar()`) | ✅ |
+| Parameter type resolution (`def f(x: Foo): x.bar()`) | ✅ |
+| Return type resolution (`x = get_foo(); x.bar()` where `get_foo() -> Foo`) | ✅ |
+| `self.method()` resolution with MRO/inheritance walking | ✅ |
+| Topology-based entry point discovery (framework-agnostic) | ✅ |
 | Conditional branch detection | ✅ |
 | Cycle detection | ✅ |
 | **Language: Python** | |
@@ -306,13 +291,12 @@ Full HLD: [docs/hld.md](docs/hld.md) | Parser HLD: [docs/parser-hld.md](docs/par
 | Interactive web viewer (`cartograph serve`) | ✅ |
 | CLI with Rich tree output | ✅ |
 | JSON export | ✅ |
-| 114 unit tests + integration tests | ✅ |
+| 122 unit tests + integration tests | ✅ |
 | **LLM Narration** | |
 | `cartograph explain` — AI-powered flow narration | ✅ |
 | Claude, OpenAI, Ollama provider support | ✅ |
 | Web viewer `/api/narrate/{qname}` endpoint | ✅ |
 | **Planned** | |
-| Polymorphic dispatch via type hints + subclass expansion | 📋 Phase 2 |
 | Diff mode ("what flows changed in this PR?") | 📋 Phase 2 |
 | Tree-sitter migration (multi-language foundation) | 📋 Phase 3 |
 | Java + Spring Boot | 📋 Phase 3 |
@@ -324,11 +308,15 @@ Full HLD: [docs/hld.md](docs/hld.md) | Parser HLD: [docs/parser-hld.md](docs/par
 
 ## Tested Against
 
-| Project | Framework | Modules | Functions | Resolved Edges | Entry Points |
-|---------|-----------|---------|-----------|----------------|--------------|
-| **Polar** | FastAPI | 914 | 6,350 | 5,572 | 328 |
-| **paperless-ngx** | Django + Celery | 135 | 1,559 | 1,099 | 26 |
-| **Redash** | Flask | 168 | 1,691 | 635 | 24 |
+| Project | Framework | Modules | Functions | Entry Points | Resolved Edges |
+|---------|-----------|---------|-----------|-------------|----------------|
+| **Sentry** | Django + Celery (custom) | 4,415 | 30,926 | 788 | 37,659 |
+| **Polar** | FastAPI | 914 | 6,350 | 600 | 6,327 |
+| **Prefect** | FastAPI + custom | 690 | 6,280 | 396 | 2,821 |
+| **Dagster** | Custom framework | 790 | 11,533 | 255 | 6,919 |
+| **paperless-ngx** | Django + Celery | 135 | 1,559 | 26 | 1,099 |
+
+Sentry and Dagster use entirely custom decorator patterns — no Cartograph-specific detectors exist for them. Entry points discovered via graph topology.
 
 122 unit tests passing.
 
@@ -337,10 +325,10 @@ Full HLD: [docs/hld.md](docs/hld.md) | Parser HLD: [docs/parser-hld.md](docs/par
 ## Roadmap
 
 **Phase 1 (complete):** Python parser + call graph + type inference + CLI + web viewer
-**Phase 2 (in progress):** ~~LLM flow narration~~ ✅ + ~~FastAPI/Flask detectors~~ ✅ + polymorphic dispatch + diff mode
-**Phase 3:** Multi-language via Tree-sitter (Java, Go, TypeScript) + VS Code extension
-**Phase 4:** CI integration, PR flow impact analysis
-**Phase 5:** Multi-repo linking, team features
+**Phase 2 (complete):** LLM narration + FastAPI/Flask detectors + principled type resolution + topology-based entry point discovery
+**Phase 3:** Diff mode ("what flows changed in this PR?") + blast radius analysis
+**Phase 4:** Multi-language via Tree-sitter (Java/Spring Boot, Go, TypeScript) + VS Code extension
+**Phase 5:** CI integration, multi-repo linking, team features
 
 ---
 
