@@ -583,18 +583,11 @@ def scan(path: str):
 
     console.print(f"  [dim]Cached to: {config.cache_dir}[/]\n")
     console.print("[bold]Next steps:[/]")
-    console.print(
-        f"  cartograph explain {path}             [dim]← explain the whole codebase[/]"
-    )
-    console.print(
-        f'  cartograph explain {path} "function"   [dim]← explain a specific flow[/]'
-    )
-    console.print(
-        f'  cartograph trace {path} "function"     [dim]← trace a call tree[/]'
-    )
-    console.print(
-        f"  cartograph entries {path}              [dim]← list all entry points[/]"
-    )
+    console.print("  carto explain              [dim]← explain the whole codebase[/]")
+    console.print('  carto explain "function"   [dim]← explain a specific flow[/]')
+    console.print('  carto trace "function"     [dim]← trace a call tree[/]')
+    console.print("  carto entries              [dim]← list all entry points[/]")
+    console.print("  carto context | claude     [dim]← pipe to any LLM[/]")
 
 
 @main.command()
