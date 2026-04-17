@@ -87,6 +87,9 @@ class ParsedFunction:
     imports: dict[str, str] = field(default_factory=dict)
     annotations: dict = field(default_factory=dict)
     local_types: dict[str, str] = field(default_factory=dict)
+    parameter_types: dict[str, str] = field(default_factory=dict)
+    return_type: str | None = None
+    call_assignments: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -101,6 +104,16 @@ class ParsedImport:
 
 
 @dataclass
+class ParsedClass:
+    """A class extracted from AST parsing, with hierarchy info."""
+
+    name: str
+    qualified_name: str
+    bases: list[str] = field(default_factory=list)
+    module_path: str | None = None
+
+
+@dataclass
 class ParsedModule:
     """A parsed Python module (file)."""
 
@@ -111,6 +124,7 @@ class ParsedModule:
     imports: list[ParsedImport] = field(default_factory=list)
     file_hash: str | None = None
     module_types: dict[str, str] = field(default_factory=dict)
+    parsed_classes: dict[str, ParsedClass] = field(default_factory=dict)
 
 
 @dataclass

@@ -17,6 +17,7 @@ from cartograph.graph.models import (
     ConditionalBranch,
     FunctionCall,
     NodeType,
+    ParsedClass,
     ParsedFunction,
     ParsedImport,
     ParsedModule,
@@ -30,10 +31,18 @@ class _CallExtractor(ast.NodeVisitor):
         self.calls: list[FunctionCall] = []
         self.branches: list[ConditionalBranch] = []
         self.local_types: dict[str, str] = {}
+        self.call_assignments: dict[str, str] = {}
         self._current_branch: ConditionalBranch | None = None
 
     def visit_Assign(self, node: ast.Assign) -> None:
-        """Track variable types from constructor calls: x = Foo() → x: Foo."""
+        """Track variable types from assignments.
+
+        Handles:
+        - x = Foo()           → local_types["x"] = "Foo"
+        - x = Foo.create()    → local_types["x"] = "Foo" (factory classmethod)
+        - x = module.Foo()    → local_types["x"] = "module.Foo"
+        - x = some_func()     → call_assignments["x"] = "some_func" (for return-type inference)
+        """
         if (
             len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
@@ -42,13 +51,23 @@ class _CallExtractor(ast.NodeVisitor):
             var_name = node.targets[0].id
             call_func = node.value.func
             if isinstance(call_func, ast.Name):
-                # x = Foo()
-                self.local_types[var_name] = call_func.id
+                name = call_func.id
+                if name[0:1].isupper():
+                    # x = Foo() — constructor, type is Foo
+                    self.local_types[var_name] = name
+                else:
+                    # x = some_func() — track for return-type inference
+                    self.call_assignments[var_name] = name
             elif isinstance(call_func, ast.Attribute) and isinstance(
                 call_func.value, ast.Name
             ):
-                # x = module.Foo()
-                self.local_types[var_name] = f"{call_func.value.id}.{call_func.attr}"
+                receiver = call_func.value.id
+                if receiver[0:1].isupper():
+                    # x = Foo.create() — factory classmethod, type is Foo
+                    self.local_types[var_name] = receiver
+                else:
+                    # x = module.Foo() — qualified constructor
+                    self.local_types[var_name] = f"{receiver}.{call_func.attr}"
         self.generic_visit(node)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
@@ -143,6 +162,7 @@ class _ModuleVisitor(ast.NodeVisitor):
         self.classes: list[str] = []
         self.imports: list[ParsedImport] = []
         self.module_types: dict[str, str] = {}
+        self.parsed_classes: dict[str, ParsedClass] = {}
         self._current_class: str | None = None
 
     def visit_Import(self, node: ast.Import) -> None:
@@ -169,7 +189,12 @@ class _ModuleVisitor(ast.NodeVisitor):
             )
 
     def visit_Assign(self, node: ast.Assign) -> None:
-        """Track module-level instance creation: x = Foo() → x: Foo."""
+        """Track module-level instance creation with factory support.
+
+        x = Foo()                    → module_types["x"] = "Foo"
+        x = Foo.create_delegation()  → module_types["x"] = "Foo" (factory)
+        x = module.Foo()             → module_types["x"] = "module.Foo"
+        """
         if self._current_class is not None:
             return
         if (
@@ -184,11 +209,33 @@ class _ModuleVisitor(ast.NodeVisitor):
             elif isinstance(call_func, ast.Attribute) and isinstance(
                 call_func.value, ast.Name
             ):
-                self.module_types[var_name] = f"{call_func.value.id}.{call_func.attr}"
+                receiver = call_func.value.id
+                if receiver[0:1].isupper():
+                    # Foo.create_delegation() — factory, type is Foo
+                    self.module_types[var_name] = receiver
+                else:
+                    # module.Foo() — qualified constructor
+                    self.module_types[var_name] = f"{receiver}.{call_func.attr}"
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self.classes.append(node.name)
         self._current_class = node.name
+
+        # Extract base classes
+        bases = []
+        for base in node.bases:
+            if isinstance(base, ast.Name):
+                bases.append(base.id)
+            elif isinstance(base, ast.Attribute):
+                bases.append(self._attr_name(base))
+
+        qualified_name = f"{self.module_path}.{node.name}"
+        self.parsed_classes[node.name] = ParsedClass(
+            name=node.name,
+            qualified_name=qualified_name,
+            bases=bases,
+            module_path=self.module_path,
+        )
 
         decorators = self._extract_decorators(node)
         decorator_details = self._extract_decorator_details(node)
@@ -196,7 +243,7 @@ class _ModuleVisitor(ast.NodeVisitor):
         self.functions.append(
             ParsedFunction(
                 name=node.name,
-                qualified_name=f"{self.module_path}.{node.name}",
+                qualified_name=qualified_name,
                 file_path=self.file_path,
                 line_start=node.lineno,
                 line_end=node.end_lineno or node.lineno,
@@ -234,6 +281,21 @@ class _ModuleVisitor(ast.NodeVisitor):
         for stmt in node.body:
             extractor.visit(stmt)
 
+        # Extract parameter type annotations
+        parameter_types: dict[str, str] = {}
+        for arg in node.args.args:
+            if arg.arg in ("self", "cls"):
+                continue
+            if arg.annotation:
+                type_str = self._annotation_to_str(arg.annotation)
+                if type_str:
+                    parameter_types[arg.arg] = type_str
+
+        # Extract return type annotation
+        return_type = None
+        if node.returns:
+            return_type = self._annotation_to_str(node.returns)
+
         self.functions.append(
             ParsedFunction(
                 name=name,
@@ -250,8 +312,41 @@ class _ModuleVisitor(ast.NodeVisitor):
                 class_name=self._current_class,
                 module_path=self.module_path,
                 local_types=extractor.local_types,
+                parameter_types=parameter_types,
+                return_type=return_type,
+                call_assignments=extractor.call_assignments,
             )
         )
+
+    def _annotation_to_str(self, node: ast.expr) -> str | None:
+        """Convert a type annotation AST node to a simple type name.
+
+        Returns the type name for resolvable annotations, None for
+        complex types (Union, generics) where we can't identify a single class.
+        Precision over recall.
+        """
+        if isinstance(node, ast.Name):
+            return node.id
+        elif isinstance(node, ast.Attribute):
+            return self._attr_name(node)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            # String annotations: "Foo"
+            return node.value
+        elif isinstance(node, ast.Subscript):
+            # Optional[Foo] → Foo (unwrap the single inner type)
+            if isinstance(node.value, ast.Name) and node.value.id == "Optional":
+                return self._annotation_to_str(node.slice)
+            # Other generics (List[X], Dict[K,V]) → None
+            return None
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+            # X | None → X (PEP 604 union syntax)
+            if isinstance(node.right, ast.Constant) and node.right.value is None:
+                return self._annotation_to_str(node.left)
+            if isinstance(node.left, ast.Constant) and node.left.value is None:
+                return self._annotation_to_str(node.right)
+            # X | Y (true union) → None
+            return None
+        return None
 
     def _extract_decorators(self, node) -> list[str]:
         decorators = []
@@ -337,6 +432,7 @@ class PythonAdapter:
                 imports=visitor.imports,
                 file_hash=hashlib.md5(source.encode()).hexdigest(),
                 module_types=visitor.module_types,
+                parsed_classes=visitor.parsed_classes,
             )
         except SyntaxError:
             return None

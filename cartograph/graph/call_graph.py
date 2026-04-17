@@ -63,21 +63,27 @@ class CallGraph:
 class CallGraphBuilder:
     """Builds a call graph from a ProjectIndex.
 
-    Three-step process:
+    Five-step process:
     1. Build global function registry (qualified_name → ParsedFunction)
-    2. Build per-module import index (local_name → qualified_name)
-    3. Resolve every FunctionCall to a qualified name using the import index
+    2. Build class hierarchy index (class_qname → [base_qnames])
+    3. Build return type index (func_qname → return_type)
+    4. Build per-module import index (local_name → qualified_name)
+    5. Resolve every FunctionCall using the unified type resolution pipeline
     """
 
     def __init__(self, index: ProjectIndex):
         self._index = index
         self._function_registry: dict[str, ParsedFunction] = {}
         self._import_index: dict[str, dict[str, str]] = {}
+        self._class_hierarchy: dict[str, list[str]] = {}
+        self._return_types: dict[str, str] = {}
 
     def build(self) -> CallGraph:
         graph = CallGraph()
 
         self._build_function_registry()
+        self._build_class_hierarchy()
+        self._build_return_type_index()
         graph.functions = dict(self._function_registry)
 
         self._build_import_index()
@@ -90,6 +96,36 @@ class CallGraphBuilder:
         for module in self._index.modules.values():
             for func in module.functions:
                 self._function_registry[func.qualified_name] = func
+
+    def _build_class_hierarchy(self) -> None:
+        """Step 2: Build class hierarchy for MRO walking."""
+        for module in self._index.modules.values():
+            local_classes = {
+                c.name: c.qualified_name for c in module.parsed_classes.values()
+            }
+            for cls in module.parsed_classes.values():
+                resolved_bases = []
+                for base_name in cls.bases:
+                    # Try local class in same module
+                    if base_name in local_classes:
+                        resolved_bases.append(local_classes[base_name])
+                        continue
+                    # Try through imports
+                    for imp in module.imports:
+                        local = imp.alias or imp.name
+                        if local == base_name.split(".")[0]:
+                            qname = self._resolve_import_to_qualified_name(imp, module)
+                            if qname:
+                                resolved_bases.append(qname)
+                                break
+                self._class_hierarchy[cls.qualified_name] = resolved_bases
+
+    def _build_return_type_index(self) -> None:
+        """Step 3: Index function return types for return-value inference."""
+        for module in self._index.modules.values():
+            for func in module.functions:
+                if func.return_type:
+                    self._return_types[func.qualified_name] = func.return_type
 
     def _build_import_index(self) -> None:
         """Step 2: For each module, map imported names to qualified names.
@@ -258,45 +294,56 @@ class CallGraphBuilder:
         module: ParsedModule,
         local_names: dict[str, str],
     ) -> str | None:
-        """Resolve a single call to a qualified name."""
+        """Resolve a single call using the unified type resolution pipeline.
 
+        Priority order for method calls (receiver.method()):
+            P0: Async dispatch — task.delay() → the task function
+            P1: self.method() — current class, then walk MRO
+            P2: Import lookup — imported_name.method()
+            P3: Parameter types — def f(x: Foo): x.method() → Foo.method
+            P4: Local types — x = Foo(); x.method() (includes factory calls)
+            P5: Return types — x = foo(); x.method() where foo() -> Foo
+            P6: ORM pattern — Model.objects.filter()
+        """
         if call.is_method_call and call.receiver:
-            # Method call: obj.method()
             receiver_parts = call.receiver.split(".")
             base_receiver = receiver_parts[0]
 
-            # Special case: async dispatch (.delay(), .apply_async(), .s(), .si())
-            # The callee is the RECEIVER (the task function), not receiver.delay
+            # P0: Async dispatch (.delay(), .apply_async())
             if call.is_async_dispatch and base_receiver in local_names:
                 return local_names[base_receiver]
 
-            # self.method() → resolve to CurrentClass.method
+            # P1: self.method() → current class + MRO
             if base_receiver == "self" and caller.class_name:
-                candidate = f"{module.module_path}.{caller.class_name}.{call.name}"
-                if candidate in self._function_registry:
-                    return candidate
-                # Don't brute-force suffix match — without inheritance
-                # tracking, we'd match the wrong class (e.g., Cassandra
-                # calling Elasticsearch's decode instead of Base's).
+                resolved = self._resolve_self_method(call, caller, module)
+                if resolved:
+                    return resolved
 
+            # P2: Direct import lookup
             if base_receiver in local_names:
-                receiver_qname = local_names[base_receiver]
-                # Try: receiver.method as qualified name
-                candidate = f"{receiver_qname}.{call.name}"
-                if candidate in self._function_registry:
-                    return candidate
+                resolved = self._resolve_via_import(
+                    call, base_receiver, receiver_parts, local_names
+                )
+                if resolved:
+                    return resolved
 
-                # Try with the receiver chain: obj.sub.method
-                if len(receiver_parts) > 1:
-                    rest = ".".join(receiver_parts[1:])
-                    candidate = f"{receiver_qname}.{rest}.{call.name}"
-                    if candidate in self._function_registry:
-                        return candidate
+            # P3: Parameter type annotations
+            resolved = self._resolve_via_param_types(call, caller, module, local_names)
+            if resolved:
+                return resolved
 
-            # Type inference: resolve obj.method() via tracked local types
-            # e.g., registry = LanguageRegistry() → registry.register()
-            #        resolves to LanguageRegistry.register
+            # P4: Local type inference (constructors + factories)
             resolved = self._resolve_via_local_types(call, caller, module, local_names)
+            if resolved:
+                return resolved
+
+            # P5: Return type inference
+            resolved = self._resolve_via_return_types(call, caller, module, local_names)
+            if resolved:
+                return resolved
+
+            # P6: ORM pattern (Model.objects.method())
+            resolved = self._resolve_orm_pattern(call, module, local_names)
             if resolved:
                 return resolved
 
@@ -305,18 +352,73 @@ class CallGraphBuilder:
             if call.name in local_names:
                 return local_names[call.name]
 
-            # Try: builtin or same-module function
             same_module = f"{module.module_path}.{call.name}"
             if same_module in self._function_registry:
                 return same_module
 
-            # Try: method call on self (within a class)
             if caller.class_name:
                 class_method = f"{module.module_path}.{caller.class_name}.{call.name}"
                 if class_method in self._function_registry:
                     return class_method
 
         return None
+
+    # ── Resolution strategies ─────────────────────────────────
+
+    def _resolve_self_method(
+        self,
+        call: FunctionCall,
+        caller: ParsedFunction,
+        module: ParsedModule,
+    ) -> str | None:
+        """P1: Resolve self.method() — current class, then walk MRO."""
+        class_qname = f"{module.module_path}.{caller.class_name}"
+
+        # Try current class
+        candidate = f"{class_qname}.{call.name}"
+        if candidate in self._function_registry:
+            return candidate
+
+        # Walk MRO (BFS up base classes)
+        return self._walk_mro_for_method(class_qname, call.name)
+
+    def _resolve_via_import(
+        self,
+        call: FunctionCall,
+        base_receiver: str,
+        receiver_parts: list[str],
+        local_names: dict[str, str],
+    ) -> str | None:
+        """P2: Resolve imported_name.method() via import index."""
+        receiver_qname = local_names[base_receiver]
+        candidate = f"{receiver_qname}.{call.name}"
+        if candidate in self._function_registry:
+            return candidate
+
+        # Try with receiver chain: obj.sub.method
+        if len(receiver_parts) > 1:
+            rest = ".".join(receiver_parts[1:])
+            candidate = f"{receiver_qname}.{rest}.{call.name}"
+            if candidate in self._function_registry:
+                return candidate
+
+        return None
+
+    def _resolve_via_param_types(
+        self,
+        call: FunctionCall,
+        caller: ParsedFunction,
+        module: ParsedModule,
+        local_names: dict[str, str],
+    ) -> str | None:
+        """P3: Resolve via function parameter type annotations."""
+        if not call.receiver:
+            return None
+        base_receiver = call.receiver.split(".")[0]
+        type_name = caller.parameter_types.get(base_receiver)
+        if not type_name:
+            return None
+        return self._resolve_type_to_method(type_name, call.name, module, local_names)
 
     def _resolve_via_local_types(
         self,
@@ -325,41 +427,118 @@ class CallGraphBuilder:
         module: ParsedModule,
         local_names: dict[str, str],
     ) -> str | None:
-        """Resolve obj.method() using type info from constructor assignments.
-
-        If caller has `x = Foo()` tracked in local_types, and we see `x.bar()`,
-        resolve Foo through imports → try QualifiedFoo.bar in the registry.
-        """
+        """P4: Resolve via local type inference (constructors + factories)."""
         if not call.receiver:
             return None
-
         base_receiver = call.receiver.split(".")[0]
         type_name = caller.local_types.get(base_receiver)
         if not type_name:
             return None
+        return self._resolve_type_to_method(type_name, call.name, module, local_names)
 
-        # Resolve the type name through imports (same as resolving a function call)
+    def _resolve_via_return_types(
+        self,
+        call: FunctionCall,
+        caller: ParsedFunction,
+        module: ParsedModule,
+        local_names: dict[str, str],
+    ) -> str | None:
+        """P5: Resolve via return type of assigned function call.
+
+        When we see: x = get_user(); x.validate()
+        And get_user() -> User, resolve to User.validate
+        """
+        if not call.receiver:
+            return None
+        base_receiver = call.receiver.split(".")[0]
+
+        func_name = caller.call_assignments.get(base_receiver)
+        if not func_name:
+            return None
+
+        # Resolve function name to qualified name
+        func_qname = local_names.get(func_name)
+        if not func_qname:
+            func_qname = f"{module.module_path}.{func_name}"
+
+        ret_type = self._return_types.get(func_qname)
+        if not ret_type:
+            return None
+
+        return self._resolve_type_to_method(ret_type, call.name, module, local_names)
+
+    def _resolve_orm_pattern(
+        self,
+        call: FunctionCall,
+        module: ParsedModule,
+        local_names: dict[str, str],
+    ) -> str | None:
+        """P6: Resolve Model.objects.method() ORM pattern."""
+        if not call.receiver:
+            return None
+        parts = call.receiver.split(".")
+        if len(parts) >= 2 and parts[1] == "objects":
+            model_name = parts[0]
+            model_qname = local_names.get(model_name)
+            if not model_qname:
+                model_qname = f"{module.module_path}.{model_name}"
+            if model_qname in self._function_registry:
+                return model_qname
+        return None
+
+    # ── Shared helpers ────────────────────────────────────────
+
+    def _resolve_type_to_method(
+        self,
+        type_name: str,
+        method_name: str,
+        module: ParsedModule,
+        local_names: dict[str, str],
+    ) -> str | None:
+        """Shared: resolve Type.method — used by P3, P4, P5.
+
+        Resolves the type through imports, tries direct match,
+        then walks MRO for inherited methods.
+        """
         type_base = type_name.split(".")[0]
         if type_base in local_names:
             type_qname = local_names[type_base]
-            # If type_name has dots (module.Foo), append the rest
             if "." in type_name:
                 rest = type_name.split(".", 1)[1]
                 type_qname = f"{type_qname}.{rest}"
         else:
-            # Try same-module class
             type_qname = f"{module.module_path}.{type_name}"
 
-        # Now try type_qname.method_name
-        candidate = f"{type_qname}.{call.name}"
+        # Direct match
+        candidate = f"{type_qname}.{method_name}"
         if candidate in self._function_registry:
             return candidate
 
-        # Try without module prefix (type_name might already be qualified)
+        # Walk MRO for inherited methods
+        resolved = self._walk_mro_for_method(type_qname, method_name)
+        if resolved:
+            return resolved
+
+        # Suffix fallback (handles cases where qualified path differs)
         for qname in self._function_registry:
-            if qname.endswith(f".{type_name}.{call.name}"):
+            if qname.endswith(f".{type_name}.{method_name}"):
                 return qname
 
+        return None
+
+    def _walk_mro_for_method(self, class_qname: str, method_name: str) -> str | None:
+        """BFS up the class hierarchy to find an inherited method."""
+        visited: set[str] = set()
+        to_check = list(self._class_hierarchy.get(class_qname, []))
+        while to_check:
+            base_qname = to_check.pop(0)
+            if base_qname in visited:
+                continue
+            visited.add(base_qname)
+            candidate = f"{base_qname}.{method_name}"
+            if candidate in self._function_registry:
+                return candidate
+            to_check.extend(self._class_hierarchy.get(base_qname, []))
         return None
 
     def _guess_unresolved_reason(self, call: FunctionCall) -> str:
