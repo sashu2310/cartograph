@@ -456,31 +456,98 @@ def serve(path: str, port: int, host: str, include_tests: bool):
     uvicorn.run(app, host=host, port=port, log_level="warning")
 
 
-def _group_entry_points(
-    index: ProjectIndex, graph: CallGraph, skip_prefixes: set[str] | None = None
-) -> list[dict]:
+def _find_common_prefix(paths: list[str], threshold: float = 0.7) -> list[str]:
+    """Find the longest common module prefix shared by >threshold of paths.
+
+    Returns the prefix parts to skip. For ['src.prefect.server.api.x',
+    'src.prefect.cli.y', 'examples.z'], returns ['src', 'prefect'] because
+    >70% of paths share that prefix.
+    """
+    if not paths:
+        return []
+    split_paths = [p.split(".") for p in paths]
+    prefix = []
+    for depth in range(min(len(p) for p in split_paths)):
+        parts_at_depth = [p[depth] for p in split_paths]
+        counts: dict[str, int] = defaultdict(int)
+        for part in parts_at_depth:
+            counts[part] += 1
+        most_common = max(counts.items(), key=lambda x: x[1])
+        if most_common[1] / len(paths) >= threshold:
+            prefix.append(most_common[0])
+        else:
+            break
+    return prefix
+
+
+# Module names that are structural, not domain-meaningful
+_STRUCTURAL_NAMES = frozenset(
+    {
+        "endpoints",
+        "tasks",
+        "views",
+        "handlers",
+        "service",
+        "services",
+        "api",
+        "routes",
+        "routers",
+        "commands",
+        "signals",
+        "receivers",
+        "models",
+        "schemas",
+        "serializers",
+        "utils",
+        "helpers",
+        "core",
+        "base",
+        "mixins",
+        "middleware",
+        "admin",
+        "management",
+    }
+)
+
+
+def _group_entry_points(index: ProjectIndex, graph: CallGraph) -> list[dict]:
     """Group entry points by domain module. Returns sorted list of flow groups."""
-    if skip_prefixes is None:
-        skip_prefixes = set()
+    all_ids = [ep.node_id for ep in index.entry_points]
+
+    # Find common prefix shared by majority (e.g., ['src', 'prefect'])
+    prefix = _find_common_prefix(all_ids)
+
+    # If after stripping, the next level is still a single dominant group,
+    # strip one more level (the project name, e.g., 'prefect' in 'src.prefect')
+    prefix_len = len(prefix)
+    next_parts = [
+        p.split(".")[prefix_len] for p in all_ids if len(p.split(".")) > prefix_len
+    ]
+    if next_parts:
+        next_counts: dict[str, int] = defaultdict(int)
+        for p in next_parts:
+            next_counts[p] += 1
+        top_next = max(next_counts.items(), key=lambda x: x[1])
+        if top_next[1] / len(next_parts) >= 0.6:
+            # The next level is dominated by one name — strip it too
+            prefix.append(top_next[0])
+            prefix_len += 1
 
     groups: dict[str, list] = defaultdict(list)
     for ep in index.entry_points:
         parts = ep.node_id.split(".")
-        domain_parts = [
-            p
-            for p in parts
-            if p not in skip_prefixes
-            and p
-            not in (
-                "endpoints",
-                "tasks",
-                "views",
-                "handlers",
-                "service",
-                "api",
-            )
-        ]
-        group = domain_parts[0] if domain_parts else parts[0]
+        # Strip the common prefix
+        domain_parts = parts[prefix_len:]
+        # Skip structural names to find the domain
+        while domain_parts and domain_parts[0] in _STRUCTURAL_NAMES:
+            domain_parts = domain_parts[1:]
+        group = (
+            domain_parts[0]
+            if domain_parts
+            else parts[-2]
+            if len(parts) >= 2
+            else parts[0]
+        )
         groups[group].append(ep)
 
     result = []
@@ -544,18 +611,7 @@ def scan(path: str):
     )
 
     # Group into flows
-    # Detect common project prefix to skip
-    all_paths = [ep.node_id for ep in index.entry_points]
-    if all_paths:
-        first_parts = all_paths[0].split(".")
-        skip = set()
-        for part in first_parts[:2]:
-            if all(part in p.split(".")[:3] for p in all_paths[:20]):
-                skip.add(part)
-    else:
-        skip = set()
-
-    flow_groups = _group_entry_points(index, graph, skip_prefixes=skip)
+    flow_groups = _group_entry_points(index, graph)
 
     console.print("[bold]Discovered Flows:[/]\n")
     for i, grp in enumerate(flow_groups[:15], 1):
@@ -870,14 +926,7 @@ def _build_codebase_context(index, graph) -> str:
             top_packages[parts[0] + "." + parts[1]] += 1
 
     # Build flow groups for richer context
-    all_paths = [ep.node_id for ep in index.entry_points]
-    skip = set()
-    if all_paths:
-        first_parts = all_paths[0].split(".")
-        for part in first_parts[:2]:
-            if all(part in p.split(".")[:3] for p in all_paths[:20]):
-                skip.add(part)
-    flow_groups = _group_entry_points(index, graph, skip_prefixes=skip)
+    flow_groups = _group_entry_points(index, graph)
 
     lines = [
         "# Codebase Analysis (generated by Cartograph)\n",
