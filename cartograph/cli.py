@@ -15,6 +15,7 @@ from cartograph.graph.call_graph import CallGraph
 from cartograph.graph.models import ProjectIndex
 
 console = Console()
+stderr_console = Console(stderr=True)
 
 LAST_PROJECT_FILE = Path.home() / ".cartograph" / "last_project"
 
@@ -37,9 +38,10 @@ def _get_last_project() -> str | None:
 def _resolve_path(path: str | None) -> str:
     """Resolve project path — use argument if given, otherwise last scanned."""
     if path and Path(path).exists():
-        return path
+        return str(Path(path).resolve())
     last = _get_last_project()
     if last:
+        stderr_console.print(f"[dim]Using: {last}[/]")
         return last
     console.print("[red]No project path given and no previous scan found.[/]")
     console.print("Run: [bold]carto scan /path/to/project[/] first.")
@@ -53,11 +55,12 @@ def _resolve_path_and_arg(path: str | None, arg: str | None) -> tuple[str, str |
     and use last scanned project.
     """
     if path and Path(path).exists():
-        return path, arg
+        return str(Path(path).resolve()), arg
     # path is actually the function name — shift args
     real_arg = path
     last = _get_last_project()
     if last:
+        stderr_console.print(f"[dim]Using: {last}[/]")
         return last, real_arg
     console.print("[red]No project path given and no previous scan found.[/]")
     console.print("Run: [bold]carto scan /path/to/project[/] first.")
