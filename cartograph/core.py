@@ -7,7 +7,7 @@ from pathlib import Path
 
 from cartograph.config import CartographConfig
 from cartograph.graph.call_graph import CallGraph, CallGraphBuilder
-from cartograph.graph.models import ProjectIndex
+from cartograph.graph.models import EntryPoint, EntryPointType, NodeType, ProjectIndex
 from cartograph.parser.languages.python import PythonAdapter
 from cartograph.parser.languages.python.frameworks import (
     CeleryDetector,
@@ -67,8 +67,115 @@ def parse_project(config: CartographConfig) -> ProjectIndex:
     return index
 
 
+# Decorators that are language features, not entry points
+_NOISE_DECORATORS = frozenset(
+    {
+        # Language features
+        "classmethod",
+        "staticmethod",
+        "property",
+        "cached_property",
+        "abstractmethod",
+        "override",
+        "deprecated",
+        "classproperty",
+        # Dataclass / struct
+        "dataclass",
+        "dataclass_json",
+        "total_ordering",
+        # Functools
+        "functools.wraps",
+        "functools.lru_cache",
+        "functools.cached_property",
+        # Context managers
+        "contextmanager",
+        "contextlib.contextmanager",
+        "contextlib.asynccontextmanager",
+        "asynccontextmanager",
+        # Testing
+        "pytest.fixture",
+        "pytest.mark.parametrize",
+        # Typing
+        "typing.overload",
+        "overload",
+        # Pydantic validators
+        "field_validator",
+        "model_validator",
+        "computed_field",
+        "validator",
+        "root_validator",
+        # SQLAlchemy
+        "hybrid_property",
+        "declared_attr",
+        "event.listens_for",
+        # Observability instrumentation (not entry points)
+        "sentry_sdk.trace",
+        "sentry_sdk.tracing.trace",
+        "metrics.wraps",
+        # Caching
+        "cached_method",
+        "lru_cache",
+    }
+)
+
+
+def _discover_entry_points_from_topology(
+    index: ProjectIndex, graph: CallGraph
+) -> list[EntryPoint]:
+    """Discover entry points from graph topology.
+
+    A function is likely an entry point if:
+    1. Zero incoming edges from project code (nobody calls it)
+    2. Has at least one outgoing edge (it does something)
+    3. Has a decorator (framework registered it for external invocation)
+    4. The decorator is not a language feature (classmethod, property, etc.)
+    """
+    known_eps = {ep.node_id for ep in index.entry_points}
+    callee_set: set[str] = set()
+    for edge in graph.edges:
+        callee_set.add(edge.callee)
+
+    discovered = []
+    for qname, func in graph.functions.items():
+        if qname in known_eps:
+            continue
+        if func.type == NodeType.CLASS:
+            continue
+        if not func.decorators:
+            continue
+        # Must have outgoing calls
+        if not graph.get_callees(qname):
+            continue
+        # Must have zero incoming edges
+        if qname in callee_set:
+            continue
+        # Filter noise decorators
+        meaningful_decorators = [
+            d for d in func.decorators if d not in _NOISE_DECORATORS
+        ]
+        if not meaningful_decorators:
+            continue
+
+        decorator_label = meaningful_decorators[0]
+        discovered.append(
+            EntryPoint(
+                node_id=qname,
+                type=EntryPointType.DISCOVERED,
+                trigger=f"@{decorator_label}",
+                description=func.docstring,
+            )
+        )
+
+    return discovered
+
+
 def parse_and_build(config: CartographConfig) -> tuple[ProjectIndex, CallGraph]:
     """Parse a project and build its call graph. Single entry point for consumers."""
     index = parse_project(config)
     graph = CallGraphBuilder(index).build()
+
+    # Topology-based entry point discovery — fills gaps left by framework detectors
+    discovered = _discover_entry_points_from_topology(index, graph)
+    index.entry_points.extend(discovered)
+
     return index, graph

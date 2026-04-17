@@ -27,6 +27,7 @@ class EntryPointType(Enum):
     CELERY_BEAT = "celery_beat"
     MANAGEMENT_COMMAND = "management_command"
     SIGNAL_HANDLER = "signal_handler"
+    DISCOVERED = "discovered"
 
 
 class AsyncBoundaryType(Enum):
