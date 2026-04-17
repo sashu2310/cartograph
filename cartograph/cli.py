@@ -1,6 +1,7 @@
 """CARTOGRAPH CLI — entry point for code flow exploration."""
 
 import json
+from collections import defaultdict, deque
 from pathlib import Path
 
 import click
@@ -11,8 +12,56 @@ from rich.tree import Tree
 from cartograph.config import CartographConfig
 from cartograph.core import parse_and_build
 from cartograph.graph.call_graph import CallGraph
+from cartograph.graph.models import ProjectIndex
 
 console = Console()
+
+LAST_PROJECT_FILE = Path.home() / ".cartograph" / "last_project"
+
+
+def _save_last_project(path: str) -> None:
+    """Remember the last scanned project path."""
+    LAST_PROJECT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LAST_PROJECT_FILE.write_text(str(Path(path).resolve()), encoding="utf-8")
+
+
+def _get_last_project() -> str | None:
+    """Get the last scanned project path."""
+    if LAST_PROJECT_FILE.exists():
+        path = LAST_PROJECT_FILE.read_text(encoding="utf-8").strip()
+        if Path(path).exists():
+            return path
+    return None
+
+
+def _resolve_path(path: str | None) -> str:
+    """Resolve project path — use argument if given, otherwise last scanned."""
+    if path and Path(path).exists():
+        return path
+    last = _get_last_project()
+    if last:
+        return last
+    console.print("[red]No project path given and no previous scan found.[/]")
+    console.print("Run: [bold]carto scan /path/to/project[/] first.")
+    raise SystemExit(1)
+
+
+def _resolve_path_and_arg(path: str | None, arg: str | None) -> tuple[str, str | None]:
+    """For commands with path + second arg (function_name, query).
+
+    If path doesn't exist as a filesystem path, treat it as the arg
+    and use last scanned project.
+    """
+    if path and Path(path).exists():
+        return path, arg
+    # path is actually the function name — shift args
+    real_arg = path
+    last = _get_last_project()
+    if last:
+        return last, real_arg
+    console.print("[red]No project path given and no previous scan found.[/]")
+    console.print("Run: [bold]carto scan /path/to/project[/] first.")
+    raise SystemExit(1)
 
 
 def _find_function(graph: CallGraph, name: str) -> str | None:
@@ -37,10 +86,11 @@ def main():
 
 
 @main.command()
-@click.argument("path", type=click.Path(exists=True))
+@click.argument("path", required=False, default=None)
 @click.option("--include-tests", is_flag=True, help="Include test files in analysis")
 def init(path: str, include_tests: bool):
     """Scan and parse a codebase."""
+    path = _resolve_path(path)
     config = CartographConfig(root_path=path, include_tests=include_tests)
     console.print(f"\n[bold blue]CARTOGRAPH[/] scanning [green]{path}[/]\n")
 
@@ -91,12 +141,13 @@ def init(path: str, include_tests: bool):
 
 
 @main.command()
-@click.argument("path", type=click.Path(exists=True))
-@click.argument("function_name")
+@click.argument("path", required=False, default=None)
+@click.argument("function_name", required=False, default=None)
 @click.option("--output", "-o", type=click.Path(), help="Output JSON file")
 @click.option("--depth", "-d", type=int, default=10, help="Max traversal depth")
 def trace(path: str, function_name: str, output: str, depth: int):
     """Trace the code flow from a specific function using the call graph."""
+    path, function_name = _resolve_path_and_arg(path, function_name)
     config = CartographConfig(root_path=path)
     console.print(f"\n[bold blue]CARTOGRAPH[/] tracing [green]{function_name}[/]\n")
 
@@ -332,9 +383,10 @@ def _serialize_graph_trace(graph: CallGraph, root_qname: str, depth: int) -> dic
 
 
 @main.command()
-@click.argument("path", type=click.Path(exists=True))
+@click.argument("path", required=False, default=None)
 def summary(path: str):
     """Show project summary with call graph stats."""
+    path = _resolve_path(path)
     config = CartographConfig(root_path=path)
     console.print(f"\n[bold blue]CARTOGRAPH[/] analyzing [green]{path}[/]\n")
 
@@ -371,12 +423,13 @@ def summary(path: str):
 
 
 @main.command()
-@click.argument("path", type=click.Path(exists=True))
+@click.argument("path", required=False, default=None)
 @click.option("--port", "-p", default=3333, type=int, help="Port to serve on")
 @click.option("--host", default="127.0.0.1", help="Host to bind to")
 @click.option("--include-tests", is_flag=True, help="Include test files")
 def serve(path: str, port: int, host: str, include_tests: bool):
     """Launch interactive web viewer for code flow exploration."""
+    path = _resolve_path(path)
     import uvicorn
 
     from cartograph.web import create_app
@@ -403,39 +456,538 @@ def serve(path: str, port: int, host: str, include_tests: bool):
     uvicorn.run(app, host=host, port=port, log_level="warning")
 
 
+def _group_entry_points(
+    index: ProjectIndex, graph: CallGraph, skip_prefixes: set[str] | None = None
+) -> list[dict]:
+    """Group entry points by domain module. Returns sorted list of flow groups."""
+    if skip_prefixes is None:
+        skip_prefixes = set()
+
+    groups: dict[str, list] = defaultdict(list)
+    for ep in index.entry_points:
+        parts = ep.node_id.split(".")
+        domain_parts = [
+            p
+            for p in parts
+            if p not in skip_prefixes
+            and p
+            not in (
+                "endpoints",
+                "tasks",
+                "views",
+                "handlers",
+                "service",
+                "api",
+            )
+        ]
+        group = domain_parts[0] if domain_parts else parts[0]
+        groups[group].append(ep)
+
+    result = []
+    for group, eps in sorted(groups.items(), key=lambda x: -len(x[1])):
+        # Find deepest entry point
+        max_reachable = 0
+        deepest_name = ""
+        for ep in eps:
+            visited: set[str] = set()
+            queue: deque[tuple[str, int]] = deque([(ep.node_id, 0)])
+            while queue:
+                qn, d = queue.popleft()
+                if qn in visited or d > 5:
+                    continue
+                visited.add(qn)
+                for edge in graph.get_callees(qn):
+                    queue.append((edge.callee, d + 1))
+            if len(visited) > max_reachable:
+                max_reachable = len(visited)
+                deepest_name = ep.node_id.split(".")[-1]
+
+        # Entry point type breakdown
+        type_counts: dict[str, int] = defaultdict(int)
+        for ep in eps:
+            type_counts[ep.type.value] += 1
+
+        result.append(
+            {
+                "name": group,
+                "count": len(eps),
+                "types": dict(type_counts),
+                "deepest_name": deepest_name,
+                "deepest_reachable": max_reachable,
+                "triggers": [ep.trigger for ep in eps[:3]],
+                "entry_points": eps,
+            }
+        )
+
+    return result
+
+
 @main.command()
 @click.argument("path", type=click.Path(exists=True))
-@click.argument("function_name")
-@click.option("--depth", "-d", type=int, default=5, help="Max traversal depth")
-def explain(path: str, function_name: str, depth: int):
-    """Narrate a code flow using an LLM."""
-    from cartograph.llm import get_llm_provider
-    from cartograph.llm.narrator import narrate_flow
+def scan(path: str):
+    """Scan a codebase, discover flows, and save to .cartograph/ cache.
 
+    This is the first step. Run once, then use entries/trace/explain
+    without re-parsing.
+    """
     config = CartographConfig(root_path=path)
-    console.print(f"\n[bold blue]CARTOGRAPH[/] explaining [green]{function_name}[/]\n")
+    console.print(f"\n[bold blue]CARTOGRAPH[/] scanning [green]{path}[/]\n")
 
+    _save_last_project(path)
+    index, graph = parse_and_build(config, use_cache=False)
+
+    total_funcs = sum(len(m.functions) for m in index.modules.values())
+    console.print("[bold green]Scan complete.[/]")
+    console.print(
+        f"  {len(index.modules)} modules · {total_funcs} functions · "
+        f"{len(index.entry_points)} entry points · {graph.total_resolved} resolved calls\n"
+    )
+
+    # Group into flows
+    # Detect common project prefix to skip
+    all_paths = [ep.node_id for ep in index.entry_points]
+    if all_paths:
+        first_parts = all_paths[0].split(".")
+        skip = set()
+        for part in first_parts[:2]:
+            if all(part in p.split(".")[:3] for p in all_paths[:20]):
+                skip.add(part)
+    else:
+        skip = set()
+
+    flow_groups = _group_entry_points(index, graph, skip_prefixes=skip)
+
+    console.print("[bold]Discovered Flows:[/]\n")
+    for i, grp in enumerate(flow_groups[:15], 1):
+        type_str = ", ".join(
+            f"{v} {k}" for k, v in sorted(grp["types"].items(), key=lambda x: -x[1])
+        )
+        triggers = ", ".join(grp["triggers"])
+        if grp["count"] > 3:
+            triggers += f", +{grp['count'] - 3} more"
+
+        console.print(
+            f"  [bold cyan]{i:>2}.[/] [bold]{grp['name']}[/] "
+            f"({grp['count']} entry points: {type_str})"
+        )
+        console.print(f"      {triggers}")
+        if grp["deepest_reachable"] > 1:
+            console.print(
+                f"      [dim]Deepest: {grp['deepest_name']} → "
+                f"{grp['deepest_reachable']} functions[/]"
+            )
+        console.print()
+
+    if len(flow_groups) > 15:
+        console.print(f"  [dim]...and {len(flow_groups) - 15} more groups[/]\n")
+
+    console.print(f"  [dim]Cached to: {config.cache_dir}[/]\n")
+    console.print("[bold]Next steps:[/]")
+    console.print(
+        f"  cartograph explain {path}             [dim]← explain the whole codebase[/]"
+    )
+    console.print(
+        f'  cartograph explain {path} "function"   [dim]← explain a specific flow[/]'
+    )
+    console.print(
+        f'  cartograph trace {path} "function"     [dim]← trace a call tree[/]'
+    )
+    console.print(
+        f"  cartograph entries {path}              [dim]← list all entry points[/]"
+    )
+
+
+@main.command()
+@click.argument("path", required=False, default=None)
+@click.option(
+    "--type",
+    "-t",
+    "ep_type",
+    default=None,
+    help="Filter by type (api_route, celery_task, signal_handler, discovered)",
+)
+def entries(path: str, ep_type: str | None):
+    """List all entry points in the codebase."""
+    path = _resolve_path(path)
+    config = CartographConfig(root_path=path)
+    index, _graph = parse_and_build(config)
+
+    eps = index.entry_points
+    if ep_type:
+        eps = [ep for ep in eps if ep.type.value == ep_type]
+
+    # Group by type
+    from collections import defaultdict
+
+    by_type: dict[str, list] = defaultdict(list)
+    for ep in eps:
+        by_type[ep.type.value].append(ep)
+
+    console.print(f"\n[bold blue]CARTOGRAPH[/] — {len(eps)} entry points\n")
+
+    for type_name, type_eps in sorted(by_type.items()):
+        table = Table(title=f"{type_name.upper()} ({len(type_eps)})", show_lines=False)
+        table.add_column("Trigger", style="cyan", max_width=50)
+        table.add_column("Function", style="green", max_width=60)
+        table.add_column("Description", style="dim", max_width=40)
+
+        for ep in sorted(type_eps, key=lambda e: e.trigger):
+            short_name = ep.node_id.split(".")[-1] if "." in ep.node_id else ep.node_id
+            desc = (ep.description or "")[:40]
+            table.add_row(ep.trigger, short_name, desc)
+
+        console.print(table)
+        console.print()
+
+
+@main.command()
+@click.argument("path", required=False, default=None)
+@click.argument("query", required=False, default=None)
+@click.option("--limit", "-l", default=20, help="Max results")
+def search(path: str, query: str, limit: int):
+    """Search functions by name."""
+    path, query = _resolve_path_and_arg(path, query)
+    config = CartographConfig(root_path=path)
     _index, graph = parse_and_build(config)
 
-    target_qname = _find_function(graph, function_name)
-    if not target_qname:
+    query_lower = query.lower()
+    results = []
+    for qname, func in graph.functions.items():
+        if query_lower in qname.lower() or query_lower in func.name.lower():
+            results.append(func)
+            if len(results) >= limit:
+                break
+
+    console.print(
+        f"\n[bold blue]CARTOGRAPH[/] — {len(results)} results for '{query}'\n"
+    )
+
+    table = Table(show_lines=False)
+    table.add_column("Function", style="green")
+    table.add_column("Type", style="cyan")
+    table.add_column("File", style="dim")
+
+    for func in results:
+        short_file = "/".join(func.file_path.split("/")[-3:])
+        table.add_row(
+            func.qualified_name, func.type.value, f"{short_file}:{func.line_start}"
+        )
+
+    console.print(table)
+
+
+@main.command()
+@click.argument("path", required=False, default=None)
+@click.argument("function_name", required=False, default=None)
+def callers(path: str, function_name: str):
+    """Show who calls a function (reverse lookup)."""
+    path, function_name = _resolve_path_and_arg(path, function_name)
+    config = CartographConfig(root_path=path)
+    _index, graph = parse_and_build(config)
+
+    target = _find_function(graph, function_name)
+    if not target:
         console.print(f"[red]Function '{function_name}' not found[/]")
         return
 
-    console.print(f"[green]Found:[/] {target_qname}")
-    console.print("[dim]Narrating...[/]\n")
+    caller_edges = graph.get_callers(target)
+    console.print(f"\n[bold blue]CARTOGRAPH[/] — callers of [green]{target}[/]\n")
+
+    if not caller_edges:
+        console.print("[dim]No callers found (this may be an entry point).[/]")
+        return
+
+    table = Table(show_lines=False)
+    table.add_column("Caller", style="green")
+    table.add_column("Line", style="dim")
+    table.add_column("Cross-file", style="cyan")
+    table.add_column("Condition", style="yellow")
+
+    for edge in caller_edges:
+        table.add_row(
+            edge.caller,
+            str(edge.call.line),
+            "✓" if edge.is_cross_file else "",
+            edge.condition or "",
+        )
+
+    console.print(table)
+
+
+@main.command()
+@click.argument("path", required=False, default=None)
+@click.argument("function_name", required=False)
+@click.option("--depth", "-d", type=int, default=5, help="Max traversal depth")
+def explain(path: str, function_name: str | None, depth: int):
+    """Explain a codebase or a specific flow using an LLM.
+
+    Without function_name: explains the whole codebase (skeleton summary).
+    With function_name: explains that specific flow.
+    """
+    path, function_name = _resolve_path_and_arg(path, function_name)
+    from cartograph.llm import get_llm_provider
+
+    config = CartographConfig(root_path=path)
+    index, graph = parse_and_build(config)
 
     try:
         provider = get_llm_provider()
-        response = narrate_flow(graph, target_qname, provider, depth=depth)
-        console.print(response.content)
-        console.print(f"\n[dim]Model: {response.model}[/]")
     except Exception as e:
         console.print(f"[red]LLM error:[/] {e}")
         console.print(
             "[dim]Set CARTOGRAPH_LLM_PROVIDER (claude/openai/ollama) "
             "and the corresponding API key.[/]"
         )
+        return
+
+    if function_name is None:
+        # Codebase-level explanation
+        _explain_codebase(index, graph, provider)
+    else:
+        # Scoped flow explanation
+        _explain_flow(graph, function_name, provider, depth)
+
+
+def _explain_codebase(index, graph, provider):
+    """Generate a codebase-level explanation from the skeleton."""
+    from collections import Counter
+
+    console.print("\n[bold blue]CARTOGRAPH[/] explaining codebase\n")
+    console.print("[dim]Building skeleton...[/]")
+
+    # Build a concise skeleton for the LLM
+    ep_by_type = Counter(ep.type.value for ep in index.entry_points)
+    top_callers = sorted(
+        [(qn, len(graph.get_callees(qn))) for qn in graph.functions],
+        key=lambda x: -x[1],
+    )[:15]
+
+    # Sample entry points (up to 5 per type)
+    ep_samples = {}
+    for ep in index.entry_points:
+        t = ep.type.value
+        if t not in ep_samples:
+            ep_samples[t] = []
+        if len(ep_samples[t]) < 5:
+            ep_samples[t].append(f"{ep.trigger} → {ep.node_id.split('.')[-1]}")
+
+    skeleton = f"""## Codebase Skeleton
+
+Modules: {len(index.modules)}
+Functions: {sum(len(m.functions) for m in index.modules.values())}
+Entry points: {len(index.entry_points)}
+Resolved call edges: {graph.total_resolved}
+
+### Entry points by type
+"""
+    for t, count in ep_by_type.most_common():
+        skeleton += f"\n**{t}** ({count}):\n"
+        for sample in ep_samples.get(t, []):
+            skeleton += f"  - {sample}\n"
+
+    skeleton += "\n### Top functions by outgoing calls\n"
+    for qn, count in top_callers:
+        skeleton += f"  {count:>3}  {qn}\n"
+
+    # Module structure
+    top_packages = Counter()
+    for mp in index.modules:
+        parts = mp.split(".")
+        if len(parts) >= 2:
+            top_packages[parts[0] + "." + parts[1]] += 1
+
+    skeleton += "\n### Top packages by module count\n"
+    for pkg, count in top_packages.most_common(15):
+        skeleton += f"  {count:>3}  {pkg}\n"
+
+    system = """You are CARTOGRAPH. You receive a structural skeleton of a Python codebase — entry points, call graph stats, top callers, and package structure. Your job is to explain what this application does, how it's organized, and what the main flows are. Write for a developer joining the team on day one. Be specific — name the actual packages, entry points, and patterns. Keep it under 500 words."""
+
+    console.print("[dim]Asking LLM...[/]\n")
+
+    response = provider.narrate(system=system, user=skeleton)
+    console.print(response.content)
+    console.print(f"\n[dim]Model: {response.model}[/]")
+
+
+def _explain_flow(graph, function_name, provider, depth):
+    """Explain a specific flow."""
+    from cartograph.llm.narrator import narrate_flow
+
+    target_qname = _find_function(graph, function_name)
+    if not target_qname:
+        console.print(f"[red]Function '{function_name}' not found[/]")
+        return
+
+    console.print(f"\n[bold blue]CARTOGRAPH[/] explaining [green]{target_qname}[/]\n")
+    console.print("[dim]Narrating...[/]\n")
+
+    response = narrate_flow(graph, target_qname, provider, depth=depth)
+    console.print(response.content)
+    console.print(f"\n[dim]Model: {response.model}[/]")
+
+
+@main.command()
+@click.argument("path", required=False, default=None)
+@click.argument("function_name", required=False)
+@click.option("--depth", "-d", type=int, default=5, help="Max traversal depth")
+def context(path: str, function_name: str | None, depth: int):
+    """Output graph context as markdown to stdout for piping to any LLM.
+
+    \b
+    Usage:
+      carto context | claude "explain this codebase"
+      carto context "checkout" | claude "explain this flow"
+      carto context "checkout" | gh copilot explain
+    """
+    path, function_name = _resolve_path_and_arg(path, function_name)
+    config = CartographConfig(root_path=path)
+    index, graph = parse_and_build(config)
+
+    if function_name is None:
+        output = _build_codebase_context(index, graph)
+    else:
+        output = _build_flow_context(index, graph, function_name, depth)
+
+    # Print raw to stdout — no Rich formatting, clean for piping
+    click.echo(output)
+
+
+def _build_codebase_context(index, graph) -> str:
+    """Build codebase-level context as markdown."""
+    from collections import Counter
+
+    ep_by_type = Counter(ep.type.value for ep in index.entry_points)
+    top_callers = sorted(
+        [(qn, len(graph.get_callees(qn))) for qn in graph.functions],
+        key=lambda x: -x[1],
+    )[:15]
+
+    ep_samples: dict[str, list[str]] = {}
+    for ep in index.entry_points:
+        t = ep.type.value
+        if t not in ep_samples:
+            ep_samples[t] = []
+        if len(ep_samples[t]) < 8:
+            ep_samples[t].append(f"{ep.trigger} → {ep.node_id.split('.')[-1]}")
+
+    top_packages: Counter[str] = Counter()
+    for mp in index.modules:
+        parts = mp.split(".")
+        if len(parts) >= 2:
+            top_packages[parts[0] + "." + parts[1]] += 1
+
+    # Build flow groups for richer context
+    all_paths = [ep.node_id for ep in index.entry_points]
+    skip = set()
+    if all_paths:
+        first_parts = all_paths[0].split(".")
+        for part in first_parts[:2]:
+            if all(part in p.split(".")[:3] for p in all_paths[:20]):
+                skip.add(part)
+    flow_groups = _group_entry_points(index, graph, skip_prefixes=skip)
+
+    lines = [
+        "# Codebase Analysis (generated by Cartograph)\n",
+        f"Modules: {len(index.modules)}",
+        f"Functions: {sum(len(m.functions) for m in index.modules.values())}",
+        f"Entry points: {len(index.entry_points)}",
+        f"Resolved call edges: {graph.total_resolved}\n",
+        "## Discovered Flows\n",
+    ]
+
+    for i, grp in enumerate(flow_groups[:20], 1):
+        type_str = ", ".join(
+            f"{v} {k}" for k, v in sorted(grp["types"].items(), key=lambda x: -x[1])
+        )
+        lines.append(
+            f"### {i}. {grp['name']} ({grp['count']} entry points: {type_str})"
+        )
+        triggers = ", ".join(grp["triggers"])
+        if grp["count"] > 3:
+            triggers += f", +{grp['count'] - 3} more"
+        lines.append(f"  Endpoints: {triggers}")
+        if grp["deepest_reachable"] > 1:
+            lines.append(
+                f"  Deepest: {grp['deepest_name']} → {grp['deepest_reachable']} functions"
+            )
+        lines.append("")
+
+    lines.append("## Entry Points by Type\n")
+    for t, count in ep_by_type.most_common():
+        lines.append(f"**{t}** ({count}):")
+        for sample in ep_samples.get(t, []):
+            lines.append(f"  - {sample}")
+        lines.append("")
+
+    lines.append("## Top Functions by Outgoing Calls\n")
+    for qn, count in top_callers:
+        lines.append(f"  {count:>3}  {qn}")
+
+    lines.append("\n## Package Structure\n")
+    for pkg, count in top_packages.most_common(15):
+        lines.append(f"  {count:>3}  {pkg}")
+
+    return "\n".join(lines)
+
+
+def _build_flow_context(index, graph, function_name: str, depth: int) -> str:
+    """Build flow-level context as markdown with graph + source snippets."""
+    from cartograph.llm.narrator import _read_source_snippets
+    from cartograph.web.serializers import serialize_graph_trace
+
+    target_qname = _find_function(graph, function_name)
+    if not target_qname:
+        return f"Error: Function '{function_name}' not found."
+
+    graph_json = serialize_graph_trace(graph, target_qname, depth)
+    snippets = _read_source_snippets(graph, graph_json, max_nodes=8)
+
+    func = graph.functions.get(target_qname)
+    nodes = graph_json.get("nodes", {})
+    edges = graph_json.get("edges", [])
+    meta = graph_json.get("metadata", {})
+
+    lines = [
+        f"# Flow Analysis: {target_qname} (generated by Cartograph)\n",
+        f"File: {func.file_path}:{func.line_start}" if func else "",
+        f"Decorators: {', '.join(func.decorators)}" if func and func.decorators else "",
+        f"Nodes: {meta.get('total_nodes', 0)} | "
+        f"Edges: {meta.get('total_edges', 0)} | "
+        f"Files: {meta.get('total_files', 0)} | "
+        f"Async boundaries: {meta.get('async_boundaries', 0)}\n",
+        "## Call Graph\n",
+    ]
+
+    # Edges as readable list
+    for edge in edges:
+        src_short = edge["source"].split(".")[-1]
+        tgt_short = edge["target"].split(".")[-1]
+        tgt_node = nodes.get(edge["target"], {})
+        tgt_file = tgt_node.get("file", "").split("/")[-1]
+        condition = (
+            f" [condition: {edge.get('condition')}]" if edge.get("condition") else ""
+        )
+        cross = " (cross-file)" if edge.get("is_cross_file") else ""
+        lines.append(f"  {src_short} → {tgt_short}{cross}{condition}  # {tgt_file}")
+
+    # Branches on root node
+    root_node = nodes.get(target_qname, {})
+    branches = root_node.get("branches", [])
+    if branches:
+        lines.append("\n## Conditional Branches\n")
+        for b in branches:
+            cond = "else" if b.get("is_else") else f"if {b.get('condition', '?')}"
+            calls = ", ".join(b.get("calls", [])) if b.get("calls") else "(no calls)"
+            lines.append(f"  {cond} → {calls}")
+
+    # Source code
+    if snippets:
+        lines.append("\n## Source Code\n")
+        for qname, snippet in snippets.items():
+            short = qname.split(".")[-1]
+            lines.append(f"### {short} (`{qname}`)\n```python\n{snippet}\n```\n")
+
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":

@@ -169,13 +169,34 @@ def _discover_entry_points_from_topology(
     return discovered
 
 
-def parse_and_build(config: CartographConfig) -> tuple[ProjectIndex, CallGraph]:
-    """Parse a project and build its call graph. Single entry point for consumers."""
+def parse_and_build(
+    config: CartographConfig, use_cache: bool = True
+) -> tuple[ProjectIndex, CallGraph]:
+    """Parse a project and build its call graph.
+
+    If use_cache is True (default), loads from .cartograph/ if the cache
+    is fresh. Otherwise parses everything and saves the result.
+    """
+    from cartograph.cache import load_cache, save_cache
+
+    cache_dir = config.cache_dir or str(Path(config.root_path) / ".cartograph")
+
+    # Try loading from cache (skip hash verification — trust the cache)
+    if use_cache:
+        result = load_cache(cache_dir)
+        if result is not None:
+            return result
+
+    # Full parse
     index = parse_project(config)
     graph = CallGraphBuilder(index).build()
 
-    # Topology-based entry point discovery — fills gaps left by framework detectors
+    # Topology-based entry point discovery
     discovered = _discover_entry_points_from_topology(index, graph)
     index.entry_points.extend(discovered)
+
+    # Save to cache
+    if use_cache:
+        save_cache(cache_dir, index, graph)
 
     return index, graph

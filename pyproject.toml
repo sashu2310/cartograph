@@ -20,6 +20,7 @@ pre-commit = "^4.0"
 
 [tool.poetry.scripts]
 cartograph = "cartograph.cli:main"
+carto = "cartograph.cli:main"
 
 [build-system]
 requires = ["poetry-core"]
