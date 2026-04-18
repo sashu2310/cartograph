@@ -1,10 +1,11 @@
 [tool.poetry]
-name = "cartograph"
+name = "cartograph-code"
 version = "0.1.0"
 description = "Static analysis tool that maps Python codebases into navigable flows"
 authors = ["Sandeep Kesarwani <sandeepkesar2310@gmail.com>"]
 license = "MIT"
 readme = "README.md"
+packages = [{include = "cartograph"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"

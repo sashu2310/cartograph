@@ -5,7 +5,7 @@
 Cartograph is a static analysis tool that maps codebases into navigable flows — entry points, call chains, conditional branches, cross-file dependencies. It discovers entry points from graph topology (not hardcoded decorators), builds a type-aware call graph, and outputs structured context that reduces LLM token usage by 100-280x.
 
 ```bash
-pip install cartograph
+pip install cartograph-code
 
 carto scan ./your-project             # scan once, cached after
 carto entries                         # list all entry points
@@ -140,7 +140,7 @@ You Cmd+Click through function calls. You grep. You read 10 files to understand 
 
 ```bash
 # Install
-pip install cartograph
+pip install cartograph-code
 
 # Scan any Python project (first time parses everything, then cached)
 carto scan /path/to/your/project
