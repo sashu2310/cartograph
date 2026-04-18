@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "cartograph"
 version = "0.1.0"
-description = "AI-powered code flow explorer — don't read the code, read the story"
+description = "Static analysis tool that maps Python codebases into navigable flows"
 authors = ["Sandeep Kesarwani <sandeepkesar2310@gmail.com>"]
 license = "MIT"
 readme = "README.md"

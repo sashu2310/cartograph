@@ -15,3 +15,9 @@ venv/
 .claude/worktrees/
 .pytest_cache/
 .mypy_cache/
+.DS_Store
+# Internal strategy docs (not public)
+docs/ceo-*.md
+docs/honest-assessment.md
+docs/limitations-catalog.md
+docs/launch-*.md
