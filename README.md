@@ -58,6 +58,52 @@ Sentry uses `@instrumented_task` and `@cell_silo_endpoint` — custom decorators
 
 ## How It Works
 
+```mermaid
+flowchart TD
+  A["Source files *.py"] --> B["stdlib ast parse"]
+
+  subgraph Layer1_LanguageAdapter
+    B --> C["AST visitors<br/>_CallExtractor · visit_Import · visit_ClassDef<br/>visit_FunctionDef · visit_Assign · visit_If"]
+    C --> D["ParsedModule IR<br/>functions · imports · class MRO<br/>assignments · call sites · branch conditions"]
+  end
+
+  subgraph Layer2_FrameworkDetectors
+    D --> E["Celery · Django Ninja · Django ORM<br/>Django Signals · FastAPI · Flask"]
+    E --> F["Annotated ParsedModule<br/>+ framework EntryPoints<br/>+ async-dispatch markers"]
+  end
+
+  F --> G["ProjectIndex<br/>all modules + framework entry points"]
+
+  subgraph Layer3_CallGraphBuilder
+    G --> H["For each call site in each function"]
+    subgraph TypeResolutionPipeline
+      direction TB
+      P0["P0 Async dispatch<br/>.delay / .apply_async"]
+      P1["P1 self.method<br/>walk class + MRO"]
+      P2["P2 Import lookup<br/>from x import y; y"]
+      P3["P3 Parameter annotations<br/>def f s Session then s.x"]
+      P4["P4 Local type inference<br/>x = Foo or factory classmethod"]
+      P5["P5 Return types<br/>x = get_user returns User"]
+      P6["P6 ORM pattern<br/>Model.objects.filter"]
+      P0 --> P1 --> P2 --> P3 --> P4 --> P5 --> P6
+    end
+    H --> TypeResolutionPipeline
+    TypeResolutionPipeline --> I["Resolved edge<br/>caller to callee · branch condition"]
+  end
+
+  I --> J["CallGraph"]
+
+  J --> K["Topology-based entry discovery<br/>decorator not in NOISE_DECORATORS<br/>+ 0 incoming edges<br/>+ at least 1 outgoing edge"]
+  K --> L["ProjectIndex<br/>framework + discovered entry points"]
+
+  L --> M[("cartograph JSON cache")]
+  J --> M
+
+  M --> N["CLI<br/>scan · entries · trace · context<br/>search · callers · explain"]
+  M --> O["FastAPI web viewer<br/>ELK.js DAG"]
+  M --> P["LLM narrator<br/>explain / context to LLM"]
+```
+
 ### Entry Point Discovery
 
 Most code analysis tools hardcode decorator names: "if you see `@app.get`, it's a route." This breaks the moment a codebase uses custom wrappers.
