@@ -2,14 +2,38 @@
 
 ## Setup
 
+1. **Fork** the repo on GitHub: https://github.com/sashu2310/cartograph → click **Fork**.
+2. **Clone your fork** and set the upstream remote:
+
 ```bash
-git clone https://github.com/sashu2310/cartograph.git
+git clone https://github.com/<your-username>/cartograph.git
 cd cartograph
+git remote add upstream https://github.com/sashu2310/cartograph.git
+
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .
 pip install pytest ruff pre-commit
 pre-commit install
+```
+
+## Submitting a PR
+
+```bash
+git checkout -b my-change             # branch off main
+# ...make changes, commit...
+git push origin my-change             # pushes to your fork
+```
+
+Then open a pull request from `<your-username>/cartograph:my-change` → `sashu2310/cartograph:main` via the GitHub UI.
+
+To keep your fork in sync with upstream:
+
+```bash
+git fetch upstream
+git checkout main
+git merge upstream/main
+git push origin main
 ```
 
 ## Running Tests
