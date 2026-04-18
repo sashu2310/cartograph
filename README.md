@@ -1,5 +1,9 @@
 # Cartograph
 
+[![CI](https://github.com/sashu2310/cartograph/actions/workflows/ci.yml/badge.svg)](https://github.com/sashu2310/cartograph/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/cartograph-code)](https://pypi.org/project/cartograph-code/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 Static analysis for Python codebases. Discovers entry points, builds cross-file call graphs, outputs structured context for LLMs.
 
 ```bash
