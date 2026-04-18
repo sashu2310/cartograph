@@ -159,8 +159,9 @@ carto context | claude "what does this codebase do"
 carto context "deploy" | claude "explain the deploy flow"
 carto context "checkout" | gh copilot explain
 
-# Or use built-in LLM (needs API key or local Ollama)
-export CARTOGRAPH_LLM_PROVIDER=ollama
+# Or use built-in LLM
+export CARTOGRAPH_LLM_PROVIDER=claude   # or openai, ollama
+export ANTHROPIC_API_KEY=sk-ant-...     # or OPENAI_API_KEY for openai
 carto explain                          # explain whole codebase
 carto explain "checkout"               # explain specific flow
 ```
