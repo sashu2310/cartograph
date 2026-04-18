@@ -32,6 +32,30 @@ Sentry uses `@instrumented_task` and `@cell_silo_endpoint` — custom decorators
 
 ---
 
+## Walkthrough
+
+**1. Scan** — parse the codebase, discover entry points, group by domain.
+
+![carto scan](docs/demo_gifs/demo-scan-final.gif)
+
+**2. Entries** — list every entry point, filter by type.
+
+![carto entries](docs/demo_gifs/demo-entries-final.gif)
+
+**3. Trace** — walk the call graph from any function, with branch conditions on edges.
+
+![carto trace](docs/demo_gifs/demo-trace-final.gif)
+
+**4. Context** — collapse the whole codebase into a structured markdown page for LLMs.
+
+![carto context](docs/demo_gifs/demo-context-final.gif)
+
+**5. Pipe to Claude** — the payoff: ask your LLM about any flow with full graph context.
+
+![carto context | claude](docs/demo_gifs/demo-claude-final.gif)
+
+---
+
 ## How It Works
 
 ### Entry Point Discovery
