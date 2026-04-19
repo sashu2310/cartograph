@@ -117,6 +117,8 @@ Caching is content-addressed, two stages, JSON on disk. blake2b-256 keys (~2× f
 
 Distribution splits by audience. CLI with markdown piping is for humans and one-shot LLM calls. The MCP server (stdio) is for the agent ecosystem — one protocol covers Claude Code, Cursor, Zed, Continue, the OpenAI Agents SDK. Tools skew deterministic: `context` returns markdown facts, `trace` / `callers` / `search` return structured JSON. No `explain` tool is exposed. The agent already has an LLM; giving it another one is a round trip we don't want to encourage.
 
+Decorators resolve to qnames, not names. Stage 2 fires `textDocument/definition` on every decorator's source position in addition to every call site. The resolved target — project qname or external-package hint — lands on `ResolvedDecorator.resolved_target`, which framework annotators (FastAPI, Flask, Celery, Django Ninja, Django Signals) match via prefix. `@app.get` is FastAPI iff `app` actually resolves into fastapi, not because the name string happens to match; aliased imports, custom registrars, and per-project variable naming all stop mattering. Custom decorators (`@instrumented_task`, `@my_company.handler`) carry their resolved qname through the pipeline, so agents see typed metadata even when no framework annotator knows them. Adding a new framework is now "match this resolved_target prefix" — not "add Python code per decorator-name variant."
+
 ## Evaluation
 
 Two producers, one project, structural overlap — no accuracy claim. v1 and v2 each emit a `CommonGraph` (the lossy shared IR); we compute pairwise Jaccard, shared-edge count, and producer-unique counts. The purpose is to measure *algorithmic divergence*, not correctness; neither producer is ground truth.

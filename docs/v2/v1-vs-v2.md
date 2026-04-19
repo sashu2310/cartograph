@@ -104,10 +104,13 @@ All v1 commands have v2 equivalents. Options may differ:
 | `entries` | `carto entries [path]` | `carto2 entries [path] [--kind]` |
 | `trace` | `carto trace [path] <fn> [-o] [-d]` | `carto2 trace <qname> [path] [--depth] [-o]` |
 | `callers` | `carto callers [path] <fn>` | `carto2 callers <qname> [path]` |
-| `search` | `carto search [path] <q>` | `carto2 search <q> [path] [--limit]` |
+| `search` | `carto search [path] <q>` | `carto2 search <q> [path] [--limit]` (ranked, name-first) |
 | `serve` | `carto serve [path] [-p]` | `carto2 serve [path] [--port] [--host]` |
 | `explain` | `carto explain [path] [fn]` | `carto2 explain <qname> [path] [--depth] [--model]` |
-| `context` | `carto context [path] [fn]` | `carto2 context [qname] [path] [--depth]` |
+| `context` | `carto context [path] [fn]` | `carto2 context [qname] [path] [--depth] [--answer Q] [--max-tokens N]` |
+| `analyze` | — | `carto2 analyze [path] [-o]` (N+1, hotspots, mixed ops, async boundaries) |
+| `dead` | — | `carto2 dead [path] [-o]` (unreachable functions/classes, v2.2) |
+| `impact` | — | `carto2 impact --rename old:new [path] [-o]` (rename-impact, v2.2) |
 | `mcp` | — | `carto2 mcp [path]` (stdio MCP server, v2-only) |
 | `benchmark` | — | `carto2 benchmark [path] [--targets]` |
 

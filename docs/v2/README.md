@@ -42,16 +42,21 @@ Ask questions from anywhere — after `init`, path is optional:
 
 ```bash
 $ carto2 entries --kind api_route
-$ carto2 trace checkout --depth 3
-$ carto2 callers send_email
-$ carto2 search checkout
-$ carto2 serve                  # browser DAG at http://127.0.0.1:3333
+$ carto2 trace checkout --depth 3                # call tree, call-site lines
+$ carto2 callers send_email                      # reverse lookup
+$ carto2 search checkout                         # ranked by function name
+$ carto2 analyze                                 # N+1, hotspots, async boundaries
+$ carto2 dead                                    # unreachable functions/classes
+$ carto2 impact --rename old.qname:new_name      # what breaks on rename
+$ carto2 serve                                   # browser DAG at :3333
 ```
 
 Pipe a flow into any LLM:
 
 ```bash
 $ carto2 context checkout | claude "explain this flow and flag risks"
+$ carto2 context --answer "what calls checkout" | claude
+$ carto2 context checkout --max-tokens 2000 | claude
 ```
 
 Or plug it into an agent natively (MCP):
@@ -139,19 +144,45 @@ $ carto2 explain checkout --model anthropic:claude-sonnet-4-5
 
 > Note: `explain` re-introduces probability to a deterministic pipeline. When you want ground truth for an agent, prefer `context` or the MCP server.
 
-### `carto2 context [QNAME] [PATH] [--depth N]`
+### `carto2 context [QNAME] [PATH] [--depth N] [--answer Q] [--max-tokens N]`
 
-Emit markdown facts for piping to an external LLM. Without QNAME: codebase-level markdown (stats + entry points + top callers). With QNAME: flow-level markdown (call tree with file:line refs).
+Emit markdown facts for piping to an external LLM. Without QNAME: codebase-level markdown (stats + entry points + top callers + top classes). With QNAME: flow-level markdown (call tree with file:line refs).
+
+`--answer Q` scopes the output to a specific question shape. Recognised patterns (case-insensitive):
+
+- `"what calls X"` / `"callers of X"` / `"who calls X"` → inverse lookup
+- `"what does X call"` / `"calls from X"` → one-hop callees
+- `"flow of X"` / `"trace of X"` → full call tree (same as positional form)
+
+`--max-tokens N` caps the flow-context output at roughly N tokens via greedy BFS (chars/4 heuristic). Stops cleanly at the budget, appends a truncation footer.
 
 ```bash
 $ carto2 context | claude "explain this codebase"
-$ carto2 context checkout | claude "explain this flow and flag any N+1 risks"
-$ carto2 context /path/to/repo | claude "what are the entry points?"
+$ carto2 context checkout | claude "explain this flow"
+$ carto2 context --answer "what calls checkout" | claude
+$ carto2 context --answer "what does process_payment call" | claude
+$ carto2 context checkout --max-tokens 2000 | claude
 ```
 
 ### `carto2 analyze [PATH] [-o FILE]`
 
 Engineering-insight analyses over the graph: N+1 ORM candidates, per-model hotspots, mixed-operation functions (read+write+delete in one body), async-boundary crossings (DB access + Celery dispatch in the same function). Rich tables by default; `-o file.json` emits the full `AnalysisReport` IR for scripting.
+
+ORM analyses gate on `django.db.models` being imported somewhere in the project; if not, they return zero findings (never false positives on non-Django code).
+
+### `carto2 dead [PATH] [-o FILE]`
+
+Report functions and classes with zero incoming edges that aren't entry points — candidates for deletion pending review for dynamic dispatch. Grouped by kind (function / method / class); dunder methods and `main`/`__main__` are excluded.
+
+Heuristic: dynamic dispatch (`getattr`, `__getattr__`, string-indexed callable dicts) bypasses the static graph, so the report is a starting list for review, not a deletion list.
+
+### `carto2 impact --rename old.qname:new_name [PATH] [-o FILE]`
+
+Enumerate every call site that would break if `old.qname` were renamed to `new_name`. Read-only — emits a patch plan, never modifies files. Exact line numbers from the graph, not grep-guessing. Imports of the old name are not yet enumerated (TODO — `ImportStmt` needs line numbers).
+
+```bash
+$ carto2 impact --rename auth.verify_token:verify_session
+```
 
 ### `carto2 mcp [PATH]`
 
