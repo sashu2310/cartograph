@@ -675,7 +675,14 @@ def _fill_tree(resolved, qname: str, depth: int, node, seen: set[str]) -> None:
 
 
 def _tree_label(qname: str, ref, edge):
-    """Rich Text label for one call-tree node; edge=None means it's the root."""
+    """Rich Text label for one call-tree node; edge=None means it's the root.
+
+    Child nodes display the *call-site* line (where in the caller the call
+    happens). The root displays the callee's definition file:line. Two
+    different pieces of navigation information; conflating them hides the
+    one users actually want — "where is this called?" vs. "where is this
+    defined?"
+    """
     from rich.text import Text
 
     label = Text()
@@ -693,7 +700,15 @@ def _tree_label(qname: str, ref, edge):
     label.append(name, style="bold white")
     label.append(f"  {qname}", style="dim")
 
-    if ref is not None:
+    if edge is not None:
+        # Two call sites to the same callee now render distinctly because
+        # each carries its own `edge.line` from within the caller.
+        label.append(f"  called@{edge.line}", style="dim yellow")
+        if ref is not None:
+            label.append(
+                f"  def→{ref.source_path.name}:{ref.line_start}", style="dim cyan"
+            )
+    elif ref is not None:
         label.append(f"  {ref.source_path.name}:{ref.line_start}", style="dim cyan")
     return label
 
