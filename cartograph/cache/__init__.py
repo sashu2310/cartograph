@@ -93,28 +93,38 @@ def load_cache(cache_dir: str) -> tuple[ProjectIndex, CallGraph] | None:
     return index, graph
 
 
-def is_cache_fresh(cache_dir: str, root_path: str) -> bool:
-    """Check if cache exists and no source files have changed."""
-    result = load_cache(cache_dir)
-    if result is None:
+def is_cache_fresh(
+    cache_dir: str,
+    root_path: str,
+    exclude_dirs: "set[str] | list[str] | None" = None,
+) -> bool:
+    """Check if cache is fresher than every Python source file in the project.
+
+    Compares each .py file's mtime against the cache index's mtime. If any
+    source file is newer than the cache, or if any new .py file has appeared
+    since the cache was written, the cache is stale.
+
+    mtime is sufficient in practice: editor saves, git checkout/pull, and all
+    normal file operations update mtime. The tradeoff against hash-based
+    verification is speed — stat() is microseconds per file vs. reading and
+    hashing the file.
+    """
+    path = Path(cache_dir)
+    cache_file = path / INDEX_FILE
+    if not cache_file.exists():
         return False
 
-    index, _ = result
+    cache_mtime = cache_file.stat().st_mtime
+    exclude = set(exclude_dirs or [])
+    root = Path(root_path)
 
-    # Check that all cached modules still match their file hashes
-    import hashlib
-
-    for module in index.modules.values():
-        source_path = Path(module.file_path)
-        if not source_path.exists():
-            return False
+    for source_file in root.rglob("*.py"):
+        if exclude and any(part in exclude for part in source_file.parts):
+            continue
         try:
-            current_hash = hashlib.md5(
-                source_path.read_text(encoding="utf-8").encode()
-            ).hexdigest()
-            if current_hash != module.file_hash:
+            if source_file.stat().st_mtime > cache_mtime:
                 return False
-        except (OSError, UnicodeDecodeError):
+        except OSError:
             return False
 
     return True

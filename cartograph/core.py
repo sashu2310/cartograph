@@ -177,12 +177,12 @@ def parse_and_build(
     If use_cache is True (default), loads from .cartograph/ if the cache
     is fresh. Otherwise parses everything and saves the result.
     """
-    from cartograph.cache import load_cache, save_cache
+    from cartograph.cache import is_cache_fresh, load_cache, save_cache
 
     cache_dir = config.cache_dir or str(Path(config.root_path) / ".cartograph")
 
-    # Try loading from cache (skip hash verification — trust the cache)
-    if use_cache:
+    # Load cache only if it's fresher than every source file (mtime check)
+    if use_cache and is_cache_fresh(cache_dir, config.root_path, config.exclude_dirs):
         result = load_cache(cache_dir)
         if result is not None:
             return result
