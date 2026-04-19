@@ -78,9 +78,7 @@ def _match_syntactic(
     return None
 
 
-def _label_for_method_suffix(
-    name: str, args: tuple[str, ...]
-) -> SemanticLabel | None:
+def _label_for_method_suffix(name: str, args: tuple[str, ...]) -> SemanticLabel | None:
     """`app.get` / `router.post` → ApiRouteLabel. Ignores name tails we don't know."""
     if "." not in name:
         return None

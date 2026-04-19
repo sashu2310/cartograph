@@ -57,8 +57,7 @@ def _match_syntactic(
 ) -> SemanticLabel | None:
     for dec in decorators:
         if dec.name in _TASK_DECORATOR_NAMES or (
-            "." in dec.name
-            and dec.name.rsplit(".", 1)[-1] in _TASK_DECORATOR_TAILS
+            "." in dec.name and dec.name.rsplit(".", 1)[-1] in _TASK_DECORATOR_TAILS
         ):
             return _build_label(dec.kwargs)
     return None

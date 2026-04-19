@@ -251,7 +251,9 @@ async def _resolve_one_decorator(
         loc = locations[0]
         target_uri = loc.get("uri") or loc.get("targetUri")
         target_range = (
-            loc.get("range") or loc.get("targetSelectionRange") or loc.get("targetRange")
+            loc.get("range")
+            or loc.get("targetSelectionRange")
+            or loc.get("targetRange")
         )
         if target_uri and target_range:
             target_path = _uri_to_path_str(target_uri)
