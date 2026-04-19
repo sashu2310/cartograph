@@ -602,10 +602,21 @@ def impact(path: Path | None, rename: str, output: Path | None) -> None:
         console.print(t)
         console.print()
 
-    console.print(
-        "[dim]Note: imports of the old name are not yet enumerated. "
-        f"grep for [bold]{report.old_qname.rsplit('.', 1)[-1]}[/] to find lingering references.[/]"
-    )
+    if report.import_sites:
+        t = Table(
+            title=f"import sites ({len(report.import_sites)})",
+            title_style="bold yellow",
+            header_style="bold",
+        )
+        t.add_column("file:line", style="dim cyan")
+        t.add_column("statement", style="dim")
+        for s in report.import_sites:
+            fname = Path(s.file).name
+            t.add_row(f"{fname}:{s.line}", s.statement)
+        console.print(t)
+        console.print()
+    else:
+        console.print("[dim](no import statements reference this name)[/]")
 
 
 @main.command()

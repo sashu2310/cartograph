@@ -107,6 +107,10 @@ class _Walker:
         # Other top-level statements (assignments, expressions) are ignored.
 
     def _extract_import(self, node: Node, *, is_from: bool) -> None:
+        # 1-based line of the import statement. `from X import Y, Z` on one
+        # line shares a single line number across Y and Z — good enough for
+        # navigation (users open the file at that line either way).
+        line = node.start_point[0] + 1
         if is_from:
             module_name = self._child_text_by_field(node, "module_name") or ""
             # Relative import level: count leading dots in the module name.
@@ -127,6 +131,7 @@ class _Walker:
                         alias=alias,
                         is_relative=is_relative,
                         level=level,
+                        line=line,
                     )
                 )
         else:
@@ -139,6 +144,7 @@ class _Walker:
                         alias=alias,
                         is_relative=False,
                         level=0,
+                        line=line,
                     )
                 )
 

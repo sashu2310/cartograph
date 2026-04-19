@@ -8,6 +8,7 @@ from pydantic import Discriminator
 
 from cartograph.v2.ir.base import IR
 from cartograph.v2.ir.resolved import ResolvedGraph
+from cartograph.v2.ir.syntactic import SyntacticModule
 
 
 class ApiRouteLabel(IR):
@@ -60,6 +61,10 @@ SemanticLabel = Annotated[
 class AnnotatedGraph(IR):
     resolved: ResolvedGraph
     labels: dict[str, tuple[SemanticLabel, ...]] = {}  # noqa: RUF012 — pydantic deep-copies defaults
+    # Keyed by module_name. Default empty so cached ResolvedGraphs still
+    # hydrate. Populated fresh by the pipeline each run (not serialized to
+    # disk — the data already lives in ExtractCache per-file).
+    source_modules: dict[str, SyntacticModule] = {}  # noqa: RUF012
 
     def labels_for(self, qname: str) -> tuple[SemanticLabel, ...]:
         return self.labels.get(qname, ())

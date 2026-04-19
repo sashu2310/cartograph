@@ -114,7 +114,11 @@ class Pipeline:
             labels = _merge_labels(
                 a.annotate(resolved, module_by_name) for a in self.annotators
             )
-            annotated = AnnotatedGraph(resolved=resolved, labels=labels)
+            annotated = AnnotatedGraph(
+                resolved=resolved,
+                labels=labels,
+                source_modules=module_by_name,
+            )
             logfire.info(
                 "stage 3 complete",
                 annotator_count=len(self.annotators),

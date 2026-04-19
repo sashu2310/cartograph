@@ -31,13 +31,20 @@ class DecoratorSpec(IR):
 
 
 class ImportStmt(IR):
-    """`from .foo import Bar as B` → module="foo", name="Bar", alias="B", level=1."""
+    """`from .foo import Bar as B` → module="foo", name="Bar", alias="B", level=1.
+
+    `line` is the 1-based source line where the import statement starts.
+    Legacy caches without this field default to 0; consumers that need
+    precise locations (rename-impact, import-cycle detection) treat 0 as
+    "unknown, fall back to module-level reporting."
+    """
 
     module: str
     name: str | None = None
     alias: str | None = None
     is_relative: bool = False
     level: int = 0
+    line: int = 0
 
 
 class PlainCall(IR):
