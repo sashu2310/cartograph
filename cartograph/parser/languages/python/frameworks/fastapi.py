@@ -60,7 +60,7 @@ class FastAPIDetector:
         if "." not in decorator:
             return None
 
-        receiver, method = decorator.rsplit(".", 1)
+        _, method = decorator.rsplit(".", 1)
 
         # HTTP route: app.get, router.post, etc.
         http_method = HTTP_METHODS.get(method)

@@ -58,7 +58,7 @@ class FlaskDetector:
         if "." not in decorator:
             return None
 
-        receiver, method = decorator.rsplit(".", 1)
+        _, method = decorator.rsplit(".", 1)
 
         # @app.route("/path") or @bp.route("/path")
         # methods kwarg is a list — not extractable from decorator_details
