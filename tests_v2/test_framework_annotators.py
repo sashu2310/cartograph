@@ -338,3 +338,110 @@ class TestDefaultAnnotators:
 
     def test_is_tuple_for_immutability(self):
         assert isinstance(default_annotators(), tuple)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Decorator-resolved path (v2.2 #13)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestResolvedDecoratorPath:
+    """When Stage 2 populates `decorators_by_target`, annotators match on
+    the resolved target prefix — not the syntactic decorator name. These
+    tests construct a graph with resolved decorators directly, bypassing
+    the syntactic fallback, to exercise the type-aware code path."""
+
+    def _graph_with_resolved(
+        self,
+        applied_to_qname: str,
+        name: str,
+        resolved_target: str,
+        args: tuple[str, ...] = (),
+        kwargs: dict[str, str] | None = None,
+    ):
+        from cartograph.v2.ir.resolved import ResolvedDecorator
+
+        return ResolvedGraph(
+            functions={},
+            edges=(),
+            decorators_by_target={
+                applied_to_qname: (
+                    ResolvedDecorator(
+                        name=name,
+                        resolved_target=resolved_target,
+                        args=args,
+                        kwargs=kwargs or {},
+                        line=10,
+                    ),
+                )
+            },
+        )
+
+    def test_fastapi_resolved_target_wins_over_name(self):
+        """`@app.get("/users")` where `app.get` resolves into fastapi."""
+        graph = self._graph_with_resolved(
+            applied_to_qname="myapp.routes.list_users",
+            name="app.get",
+            resolved_target="fastapi.applications.FastAPI.get",
+            args=("/users",),
+        )
+        labels = FastApiAnnotator().annotate(graph, {})
+        assert "myapp.routes.list_users" in labels
+        label = labels["myapp.routes.list_users"][0]
+        assert isinstance(label, ApiRouteLabel)
+        assert label.method == "GET"
+        assert label.path == "/users"
+
+    def test_fastapi_resolved_non_fastapi_target_rejected(self):
+        """`@app.get` that resolves to a non-fastapi module → no label.
+        This is the bug the resolved path fixes: alias collisions."""
+        graph = self._graph_with_resolved(
+            applied_to_qname="other.mod.handler",
+            name="app.get",
+            resolved_target="click.core.Group.command",
+            args=("/whatever",),
+        )
+        labels = FastApiAnnotator().annotate(graph, {})
+        assert labels == {}
+
+    def test_celery_resolved_target_matches_package_prefix(self):
+        graph = self._graph_with_resolved(
+            applied_to_qname="myapp.tasks.send_email",
+            name="app.task",
+            resolved_target="celery.app.base.Celery.task",
+            kwargs={"queue": "priority", "bind": "True"},
+        )
+        labels = CeleryAnnotator().annotate(graph, {})
+        assert "myapp.tasks.send_email" in labels
+        label = labels["myapp.tasks.send_email"][0]
+        assert isinstance(label, CeleryTaskLabel)
+        assert label.queue == "priority"
+        assert label.bind is True
+
+    def test_django_signals_resolved_receiver(self):
+        graph = self._graph_with_resolved(
+            applied_to_qname="myapp.handlers.on_save",
+            name="receiver",
+            resolved_target="django.dispatch.dispatcher.receiver",
+            args=("post_save",),
+            kwargs={"sender": "User"},
+        )
+        labels = DjangoSignalsAnnotator().annotate(graph, {})
+        assert "myapp.handlers.on_save" in labels
+        label = labels["myapp.handlers.on_save"][0]
+        assert isinstance(label, DjangoSignalLabel)
+        assert label.signal_name == "post_save"
+        assert label.sender == "User"
+
+    def test_resolved_target_none_falls_through(self):
+        """resolved_target=None (LSP failure) should NOT emit a label via the
+        resolved path; the graph's presence of decorators_by_target disables
+        the syntactic fallback, so the result is empty."""
+        graph = self._graph_with_resolved(
+            applied_to_qname="myapp.routes.mystery",
+            name="app.get",
+            resolved_target=None,
+            args=("/x",),
+        )
+        labels = FastApiAnnotator().annotate(graph, {})
+        assert labels == {}
