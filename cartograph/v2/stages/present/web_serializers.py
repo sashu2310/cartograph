@@ -119,23 +119,22 @@ def serialize_callers(graph: AnalyzedGraph, qname: str) -> dict[str, Any]:
 def serialize_search(
     graph: AnalyzedGraph, query: str, limit: int = 20
 ) -> dict[str, Any]:
+    from cartograph.v2.stages.present.cli import ranked_search
+
     resolved = graph.annotated.resolved
     entry_qnames = {ep.qname for ep in graph.entry_points}
-    needle = query.lower()
     results: list[dict[str, Any]] = []
-    for qname, func in resolved.functions.items():
-        if needle in qname.lower() or needle in func.name.lower():
-            results.append(
-                {
-                    "qualified_name": qname,
-                    "name": func.name,
-                    "file": str(func.source_path),
-                    "type": func.kind,
-                    "is_entry_point": qname in entry_qnames,
-                }
-            )
-            if len(results) >= limit:
-                break
+    for _, qname in ranked_search(resolved, query, limit):
+        func = resolved.functions[qname]
+        results.append(
+            {
+                "qualified_name": qname,
+                "name": func.name,
+                "file": str(func.source_path),
+                "type": func.kind,
+                "is_entry_point": qname in entry_qnames,
+            }
+        )
     return {"query": query, "results": results}
 
 
