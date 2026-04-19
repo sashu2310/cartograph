@@ -174,7 +174,7 @@ def init(path: Path, include_tests: bool) -> None:
     """Scan a project and remember its path for later commands."""
     graph = asyncio.run(_build_graph(path, include_tests))
     _save_last_project(path)
-    click.echo(CliPresenter().render(graph, {}).decode())
+    _pretty_scan(graph, path)
     click.echo(f"\n(saved as last project: {path.resolve()})", err=True)
 
 
