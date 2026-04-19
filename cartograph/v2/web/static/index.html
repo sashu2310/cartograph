@@ -340,11 +340,7 @@
   <div id="cy"></div>
   <div id="empty-state">← pick an entry point to trace a flow</div>
   <div id="legend">
-    <span><span class="swatch" style="background:#3b82f6"></span>api_route</span>
-    <span><span class="swatch" style="background:#a78bfa"></span>celery_task</span>
-    <span><span class="swatch" style="background:#fbbf24"></span>signal_handler</span>
-    <span><span class="swatch" style="background:#34d399"></span>discovered</span>
-    <span><span class="swatch" style="background:#475569"></span>function</span>
+    <span id="kind-legend"></span>
     <span style="margin-left:10px;border-left:1px solid var(--border);padding-left:10px;color:var(--text-dim)">
       <span style="border-top:1px dashed #f472b6;display:inline-block;width:18px;vertical-align:middle"></span> async
       <span style="border-top:1px solid #a78bfa;display:inline-block;width:18px;margin-left:8px;vertical-align:middle"></span> cross-file
@@ -427,6 +423,7 @@ async function init() {
     <span><b>${s.total_unresolved}</b>unresolved</span>`;
 
   renderSidebar(state.overview.entry_points_by_type);
+  renderKindLegend(state.overview.entry_points_by_type);
   setupSearch();
   setupCy();
 
@@ -439,6 +436,27 @@ async function init() {
     )[0];
     loadSubgraph(first.node_id).catch(err => console.error('auto-load failed:', err));
   }
+}
+
+// ── Legend: one swatch per kind that actually appears in the data ─────
+
+function renderKindLegend(byKind) {
+  const el = document.getElementById('kind-legend');
+  if (!el) return;
+  // Kinds that have at least one entry. Sort by count desc for priority.
+  const present = Object.entries(byKind)
+    .filter(([, eps]) => eps && eps.length)
+    .sort((a, b) => b[1].length - a[1].length)
+    .map(([k]) => k);
+  // Always show the generic function swatch — it's what internal call-graph
+  // nodes (non-entry functions) render as, which users will always see.
+  const kinds = [...present, 'function'];
+  el.innerHTML = kinds
+    .map(k => {
+      const colour = KIND_COLORS[k] || '#475569';
+      return `<span><span class="swatch" style="background:${colour}"></span>${k}</span>`;
+    })
+    .join('');
 }
 
 // ── Sidebar: entry points grouped by kind ─────────────────────────────
