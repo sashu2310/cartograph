@@ -526,6 +526,25 @@ def _pretty_analysis(report) -> None:
             console.print(f"[dim]… +{len(report.boundary_crossings) - 20} more[/]")
         console.print()
 
+    # Long call chains (entry point reaches deep into the callee tree)
+    if report.long_call_chains:
+        t = Table(
+            title=f"Long call chains ({len(report.long_call_chains)})",
+            title_style="bold yellow",
+            header_style="bold",
+        )
+        t.add_column("entry", style="white")
+        t.add_column("depth", justify="right", style="bold yellow")
+        t.add_column("deepest reachable", style="dim")
+        for c in report.long_call_chains[:15]:
+            t.add_row(c.entry_qname, str(c.depth), c.deepest_callee)
+        console.print(t)
+        if len(report.long_call_chains) > 15:
+            console.print(
+                f"[dim]… +{len(report.long_call_chains) - 15} more chains[/]"
+            )
+        console.print()
+
     # Path collisions (FastAPI/Flask/Ninja routes sharing method+path)
     if report.path_collisions:
         t = Table(
@@ -590,6 +609,7 @@ def _pretty_analysis(report) -> None:
         or report.import_cycles
         or report.sync_in_async
         or report.path_collisions
+        or report.long_call_chains
     ):
         console.print(
             "[dim](no findings — either no ORM/async patterns, "
@@ -685,12 +705,18 @@ def impact(path: Path | None, rename: str, output: Path | None) -> None:
 @main.command()
 @click.argument("path", type=click.Path(exists=True, path_type=Path), required=False)
 @click.option(
+    "--kind",
+    type=click.Choice(["function", "method", "class"]),
+    default=None,
+    help="Restrict to one kind of dead symbol.",
+)
+@click.option(
     "-o",
     "--output",
     type=click.Path(dir_okay=False, path_type=Path),
     help="Write findings as JSON to this file instead of printing a table.",
 )
-def dead(path: Path | None, output: Path | None) -> None:
+def dead(path: Path | None, kind: str | None, output: Path | None) -> None:
     """Report functions and classes with zero incoming edges and no entry-point
     status — candidates for deletion, pending review for dynamic dispatch.
 
@@ -706,6 +732,8 @@ def dead(path: Path | None, output: Path | None) -> None:
     resolved_path = _resolve_path(path)
     graph = asyncio.run(_build_graph(resolved_path, include_tests=False))
     findings = list(find_dead(graph))
+    if kind is not None:
+        findings = [f for f in findings if f.kind == kind]
 
     if output is not None:
         payload = [f.model_dump() for f in findings]
