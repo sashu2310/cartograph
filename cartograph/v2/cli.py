@@ -526,15 +526,34 @@ def _pretty_analysis(report) -> None:
             console.print(f"[dim]… +{len(report.boundary_crossings) - 20} more[/]")
         console.print()
 
+    # Import cycles (framework-agnostic; fires on any project)
+    if report.import_cycles:
+        t = Table(
+            title=f"Import cycles ({len(report.import_cycles)})",
+            title_style="bold red",
+            header_style="bold",
+        )
+        t.add_column("#", justify="right", style="dim")
+        t.add_column("cycle", style="white")
+        for i, cycle in enumerate(report.import_cycles[:20], 1):
+            t.add_row(str(i), " → ".join(cycle.modules) + " → " + cycle.modules[0])
+        console.print(t)
+        if len(report.import_cycles) > 20:
+            console.print(
+                f"[dim]… +{len(report.import_cycles) - 20} more cycles[/]"
+            )
+        console.print()
+
     if not (
         report.n_plus_one
         or report.hotspots
         or report.mixed_ops
         or report.boundary_crossings
+        or report.import_cycles
     ):
         console.print(
             "[dim](no findings — either no ORM/async patterns, "
-            "or nothing is suspicious)[/]"
+            "no import cycles, or nothing is suspicious)[/]"
         )
 
 
