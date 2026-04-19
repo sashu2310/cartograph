@@ -11,20 +11,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v3
         with:
-          python-version: "3.12"
-      - run: pip install ruff
-      - run: ruff check cartograph/ tests/
-      - run: ruff format --check cartograph/ tests/
+          enable-cache: true
+      - run: uv tool install ruff
+      - run: ruff check cartograph/ tests/ tests_v2/
+      - run: ruff format --check cartograph/ tests/ tests_v2/
 
-  test:
+  test-v1:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - run: pip install -e ".[dev]" || pip install -e .
-      - run: pip install pytest
+          python-version: "3.11"
+      - run: uv pip install --system -e ".[dev]"
       - run: pytest tests/ -m "not integration" -q
+
+  test-v2:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: uv pip install --system -e ".[dev]"
+      # v2 resolver needs the `ty` LSP binary on PATH
+      - run: uv tool install ty
+      - run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - run: pytest tests_v2/ -m "not integration" -q

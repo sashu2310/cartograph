@@ -4,6 +4,8 @@
 [![PyPI](https://img.shields.io/pypi/v/cartograph-code)](https://pypi.org/project/cartograph-code/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+> **v2 is here** — harnessing deterministic context for LLMs. `ty`-backed resolver, frozen typed IRs, MCP server, 4-repo benchmark. See [`docs/v2/`](./docs/v2/README.md) for the v2 CLI (`carto2`), architecture, and agent integration.
+
 Static analysis for Python codebases. Discovers entry points, builds cross-file call graphs, outputs structured context for LLMs.
 
 ```bash
