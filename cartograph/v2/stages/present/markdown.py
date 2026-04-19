@@ -13,18 +13,41 @@ from cartograph.v2.ir.analyzed import AnalyzedGraph
 
 def codebase_markdown(graph: AnalyzedGraph) -> str:
     """Codebase-level markdown. No source snippets — LLMs read files themselves."""
+    from cartograph.v2.stages.present.cli import (
+        bucket_unresolved,
+        top_classes_by_usage,
+    )
+
     resolved = graph.annotated.resolved
     functions = resolved.functions
     eps_by_kind = Counter(ep.kind for ep in graph.entry_points)
     top_callers = sorted(
-        ((qn, len(resolved.get_callees(qn))) for qn in functions),
+        (
+            (qn, len(resolved.get_callees(qn)))
+            for qn, fn in functions.items()
+            if fn.kind != "class"
+        ),
         key=lambda x: -x[1],
     )[:15]
+    class_count = sum(1 for fn in functions.values() if fn.kind == "class")
+    top_classes = top_classes_by_usage(resolved, limit=15)
+    buckets = bucket_unresolved(resolved.unresolved)
 
     lines = [
         "# Codebase Analysis (cartograph v2)\n",
         f"- Functions: {len(functions)}",
+        f"- Classes: {class_count}",
         f"- Resolved edges: {len(resolved.edges)}",
+        f"- Unresolved: {len(resolved.unresolved)}"
+        + (
+            " ("
+            + ", ".join(
+                f"{v} {k}" for k, v in sorted(buckets.items(), key=lambda x: -x[1])
+            )
+            + ")"
+            if buckets
+            else ""
+        ),
         f"- Entry points: {len(graph.entry_points)}\n",
         "## Entry Points by Kind\n",
     ]
@@ -33,6 +56,12 @@ def codebase_markdown(graph: AnalyzedGraph) -> str:
         samples = [ep for ep in graph.entry_points if ep.kind == kind][:8]
         for ep in samples:
             lines.append(f"  - {ep.qname}")
+        lines.append("")
+
+    if top_classes:
+        lines.append("## Top Classes by Usage\n")
+        for qn, count in top_classes:
+            lines.append(f"  {count:>3}  {qn}")
         lines.append("")
 
     lines.append("## Top Functions by Outgoing Calls\n")

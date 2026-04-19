@@ -87,16 +87,24 @@ def build_server(project_root: Path) -> FastMCP:
             return result.value
 
     @mcp.tool
-    async def scan() -> dict[str, int]:
-        """Summary stats: module, function, edge, unresolved, entry-point counts."""
+    async def scan() -> dict[str, Any]:
+        """Summary stats: module / function / class / edge / unresolved /
+        entry-point counts. `unresolved_by_reason` breaks the total down
+        into buckets (builtin / external / lsp / unknown) so a 10K count
+        can be read correctly as "mostly stdlib" rather than a failure."""
+        from cartograph.v2.stages.present.cli import bucket_unresolved
+
         g = await graph()
         resolved = g.annotated.resolved
         modules = {f.module for f in resolved.functions.values()}
+        class_count = sum(1 for fn in resolved.functions.values() if fn.kind == "class")
         return {
             "modules": len(modules),
             "functions": len(resolved.functions),
+            "classes": class_count,
             "edges": len(resolved.edges),
             "unresolved": len(resolved.unresolved),
+            "unresolved_by_reason": bucket_unresolved(resolved.unresolved),
             "entry_points": len(g.entry_points),
         }
 

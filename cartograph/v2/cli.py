@@ -163,13 +163,28 @@ def scan(path: Path | None, include_tests: bool) -> None:
 @click.argument("path", type=click.Path(exists=True, path_type=Path), required=False)
 @click.option("--kind", default=None, help="filter by entry-point kind")
 def entries(path: Path | None, kind: str | None) -> None:
-    """List discovered entry points."""
+    """List discovered entry points (rich-rendered; same shape as `carto2 scan`)."""
+    from rich.console import Console
+
     resolved_path = _resolve_path(path)
     graph = asyncio.run(_build_graph(resolved_path, include_tests=False))
-    for ep in graph.entry_points:
-        if kind and ep.kind != kind:
-            continue
-        click.echo(f"{ep.kind:<20} {ep.qname}")
+
+    kind_styles = {
+        "api_route": "bright_blue",
+        "celery_task": "magenta",
+        "celery_beat": "bright_magenta",
+        "signal_handler": "yellow",
+        "discovered": "green",
+    }
+
+    console = Console()
+    hits = [ep for ep in graph.entry_points if kind is None or ep.kind == kind]
+    if not hits:
+        console.print("[dim](no entry points match)[/]")
+        return
+    for ep in sorted(hits, key=lambda e: (e.kind, e.qname)):
+        accent = kind_styles.get(ep.kind, "white")
+        console.print(_pretty_entry_line(ep, accent))
 
 
 @main.command()
@@ -505,9 +520,15 @@ def _pretty_scan(graph: AnalyzedGraph, project_root: Path) -> None:
     from rich.table import Table
     from rich.text import Text
 
+    from cartograph.v2.stages.present.cli import (
+        bucket_unresolved,
+        top_classes_by_usage,
+    )
+
     console = Console()
     resolved = graph.annotated.resolved
     modules = {f.module for f in resolved.functions.values()}
+    class_count = sum(1 for fn in resolved.functions.values() if fn.kind == "class")
 
     title = Text()
     title.append("CARTOGRAPH v2 ", style="bold magenta")
@@ -521,11 +542,29 @@ def _pretty_scan(graph: AnalyzedGraph, project_root: Path) -> None:
     stats.add_column()
     stats.add_row(str(len(modules)), "modules")
     stats.add_row(str(len(resolved.functions)), "functions")
+    stats.add_row(str(class_count), "classes")
     stats.add_row(str(len(resolved.edges)), "edges")
     stats.add_row(str(len(resolved.unresolved)), "unresolved")
+    # Per-reason breakdown so "10K unresolved" doesn't read as "broken."
+    buckets = bucket_unresolved(resolved.unresolved)
+    for reason in sorted(buckets, key=lambda r: -buckets[r]):
+        stats.add_row(
+            f"[dim]{buckets[reason]}[/]",
+            f"[dim]  · {reason}[/]",
+        )
     stats.add_row(str(len(graph.entry_points)), "entry points")
     console.print(Panel(stats, title="summary", expand=False))
     console.print()
+
+    # Top classes by usage — helps orient on a new codebase (Agent, Config, etc.).
+    top_classes = top_classes_by_usage(resolved, limit=8)
+    if top_classes:
+        console.print(Text("top classes (by usage)", style="bold dim"))
+        for qn, count in top_classes:
+            console.print(
+                f"  [bold cyan]{count:>3}[/] [white]{qn.split('.')[-1]}[/] [dim]{qn}[/]"
+            )
+        console.print()
 
     if not graph.entry_points:
         console.print("[dim](no entry points discovered)[/]")

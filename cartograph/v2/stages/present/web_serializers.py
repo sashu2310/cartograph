@@ -16,18 +16,23 @@ from cartograph.v2.ir.resolved import Edge, FunctionRef, ResolvedGraph
 
 
 def serialize_overview(graph: AnalyzedGraph, project_name: str) -> dict[str, Any]:
+    from cartograph.v2.stages.present.cli import bucket_unresolved
+
     resolved = graph.annotated.resolved
     entry_points_by_type: dict[str, list[dict[str, Any]]] = {}
     for ep in graph.entry_points:
         entry_points_by_type.setdefault(ep.kind, []).append(_entry_json(ep))
     modules = {f.module for f in resolved.functions.values()}
+    class_count = sum(1 for fn in resolved.functions.values() if fn.kind == "class")
     return {
         "project_name": project_name,
         "stats": {
             "total_modules": len(modules),
             "total_functions": len(resolved.functions),
+            "total_classes": class_count,
             "total_edges": len(resolved.edges),
             "total_unresolved": len(resolved.unresolved),
+            "unresolved_by_reason": bucket_unresolved(resolved.unresolved),
             "total_entry_points": len(graph.entry_points),
         },
         "entry_points_by_type": entry_points_by_type,

@@ -10,8 +10,10 @@ from pydantic import BaseModel
 class Stats(BaseModel):
     total_modules: int
     total_functions: int
+    total_classes: int
     total_edges: int
     total_unresolved: int
+    unresolved_by_reason: dict[str, int] = {}
     total_entry_points: int
 
 
