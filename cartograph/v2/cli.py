@@ -97,8 +97,9 @@ def _build_pipeline(server: LspServer) -> Pipeline:
 
 async def _build_graph(path: Path, include_tests: bool) -> AnalyzedGraph:
     import time
+    from typing import Any
 
-    stats: dict[str, object] = {}
+    stats: dict[str, Any] = {}
     start = time.perf_counter()
     async with LspServer(["ty", "server"]) as server:
         pipeline = _build_pipeline(server)
@@ -110,10 +111,13 @@ async def _build_graph(path: Path, include_tests: bool) -> AnalyzedGraph:
     if is_err(result):
         raise click.ClickException(f"pipeline failed: {result.error}")
     _print_cache_footer(stats, elapsed)
+    # is_err narrowed the union above; ty's TypeGuard inference is imperfect
+    # here, so explicit assert + attribute access preserves correctness.
+    assert not is_err(result)
     return result.value
 
 
-def _print_cache_footer(stats: dict[str, object], elapsed: float) -> None:
+def _print_cache_footer(stats: dict, elapsed: float) -> None:
     """Single-line cache + timing summary on stderr.
 
     Format: `(2.4s · resolve: hit · extract: 42/42 hit)`
@@ -125,8 +129,8 @@ def _print_cache_footer(stats: dict[str, object], elapsed: float) -> None:
         parts.append("[green]resolve: hit[/]")
     elif resolve_hit is False:
         parts.append("[yellow]resolve: miss[/]")
-    extract_hits = int(stats.get("extract_hits", 0) or 0)
-    extract_misses = int(stats.get("extract_misses", 0) or 0)
+    extract_hits = stats.get("extract_hits", 0) or 0
+    extract_misses = stats.get("extract_misses", 0) or 0
     total = extract_hits + extract_misses
     if total > 0:
         parts.append(f"extract: {extract_hits}/{total} hit")
@@ -135,7 +139,7 @@ def _print_cache_footer(stats: dict[str, object], elapsed: float) -> None:
     Console(stderr=True).print(f"[dim]({' · '.join(parts)})[/]")
 
 
-def _verbose_callback(ctx, param, value):
+def _verbose_callback(_ctx, _param, value):
     """Reconfigure logfire to emit INFO spans when `-v/--verbose` is set.
 
     logfire is configured at import time (see cartograph/v2/__init__.py) —
