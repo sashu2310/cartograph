@@ -95,16 +95,27 @@ def _build_pipeline(server: LspServer) -> Pipeline:
     )
 
 
-async def _build_graph(path: Path, include_tests: bool) -> AnalyzedGraph:
+async def _build_graph(
+    path: Path,
+    include_tests: bool,
+    extra_exclude: frozenset[str] | None = None,
+) -> AnalyzedGraph:
     import time
     from typing import Any
 
+    from cartograph.v2.config import DEFAULT_EXCLUDE_DIRS
+
     stats: dict[str, Any] = {}
     start = time.perf_counter()
+    exclude = DEFAULT_EXCLUDE_DIRS | (extra_exclude or frozenset())
     async with LspServer(["ty", "server"]) as server:
         pipeline = _build_pipeline(server)
         result = await pipeline.build(
-            RunConfig(project_root=path, include_tests=include_tests),
+            RunConfig(
+                project_root=path,
+                include_tests=include_tests,
+                exclude_dirs=exclude,
+            ),
             stats=stats,
         )
     elapsed = time.perf_counter() - start
@@ -174,9 +185,15 @@ def main() -> None:
 @main.command()
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
 @click.option("--include-tests/--no-tests", default=False, show_default=True)
-def init(path: Path, include_tests: bool) -> None:
+@click.option(
+    "--exclude-dirs",
+    default=None,
+    help="Comma-separated directory names to exclude beyond defaults (e.g. `docs_src,examples,bench`).",
+)
+def init(path: Path, include_tests: bool, exclude_dirs: str | None) -> None:
     """Scan a project and remember its path for later commands."""
-    graph = asyncio.run(_build_graph(path, include_tests))
+    extra = _parse_exclude_dirs(exclude_dirs)
+    graph = asyncio.run(_build_graph(path, include_tests, extra_exclude=extra))
     _save_last_project(path)
     _pretty_scan(graph, path)
     click.echo(f"\n(saved as last project: {path.resolve()})", err=True)
@@ -185,11 +202,24 @@ def init(path: Path, include_tests: bool) -> None:
 @main.command()
 @click.argument("path", type=click.Path(exists=True, path_type=Path), required=False)
 @click.option("--include-tests/--no-tests", default=False, show_default=True)
-def scan(path: Path | None, include_tests: bool) -> None:
+@click.option(
+    "--exclude-dirs",
+    default=None,
+    help="Comma-separated directory names to exclude beyond defaults.",
+)
+def scan(path: Path | None, include_tests: bool, exclude_dirs: str | None) -> None:
     """Scan a project and print a summary."""
+    extra = _parse_exclude_dirs(exclude_dirs)
     resolved_path = _resolve_path(path)
-    graph = asyncio.run(_build_graph(resolved_path, include_tests))
+    graph = asyncio.run(_build_graph(resolved_path, include_tests, extra_exclude=extra))
     _pretty_scan(graph, resolved_path)
+
+
+def _parse_exclude_dirs(spec: str | None) -> frozenset[str] | None:
+    """Parse `--exclude-dirs foo,bar,baz` into a frozenset. Empty → None."""
+    if not spec:
+        return None
+    return frozenset(part.strip() for part in spec.split(",") if part.strip())
 
 
 @main.command()
@@ -406,12 +436,19 @@ def context(
 @main.command()
 @click.argument("path", type=click.Path(exists=True, path_type=Path), required=False)
 @click.option(
+    "--limit",
+    default=20,
+    type=int,
+    show_default=True,
+    help="Max rows per analysis table before truncation.",
+)
+@click.option(
     "-o",
     "--output",
     type=click.Path(dir_okay=False, path_type=Path),
     help="Write the full report as JSON to this file instead of printing tables.",
 )
-def analyze(path: Path | None, output: Path | None) -> None:
+def analyze(path: Path | None, limit: int, output: Path | None) -> None:
     """Engineering-insight analyses over the graph.
 
     Reports N+1 ORM candidates, model hotspots, mixed-operation functions,
@@ -429,10 +466,10 @@ def analyze(path: Path | None, output: Path | None) -> None:
         click.echo(f"wrote {output}", err=True)
         return
 
-    _pretty_analysis(report)
+    _pretty_analysis(report, limit=limit)
 
 
-def _pretty_analysis(report) -> None:
+def _pretty_analysis(report, limit: int = 20) -> None:
     """Rich-rendered analysis report with one table per finding kind."""
     from rich.console import Console
     from rich.table import Table
@@ -470,7 +507,7 @@ def _pretty_analysis(report) -> None:
         t.add_column("W", justify="right", style="yellow")
         t.add_column("D", justify="right", style="red")
         t.add_column("functions", justify="right", style="dim")
-        for h in report.hotspots[:15]:
+        for h in report.hotspots[:limit]:
             t.add_row(
                 h.model,
                 str(h.total),
@@ -480,7 +517,7 @@ def _pretty_analysis(report) -> None:
                 str(h.accessing_functions),
             )
         console.print(t)
-        if len(report.hotspots) > 15:
+        if len(report.hotspots) > limit:
             console.print(f"[dim]… +{len(report.hotspots) - 15} more models[/]")
         console.print()
 
@@ -494,10 +531,10 @@ def _pretty_analysis(report) -> None:
         t.add_column("ops", style="yellow")
         t.add_column("function")
         t.add_column("models", style="dim")
-        for m in report.mixed_ops[:20]:
+        for m in report.mixed_ops[:limit]:
             t.add_row("+".join(m.operations), m.qname, ", ".join(m.models))
         console.print(t)
-        if len(report.mixed_ops) > 20:
+        if len(report.mixed_ops) > limit:
             console.print(f"[dim]… +{len(report.mixed_ops) - 20} more[/]")
         console.print()
 
@@ -513,7 +550,7 @@ def _pretty_analysis(report) -> None:
         t.add_column("kind", style="magenta")
         t.add_column("function")
         t.add_column("models", style="dim")
-        for b in report.boundary_crossings[:20]:
+        for b in report.boundary_crossings[:limit]:
             t.add_row(
                 str(b.orm_count),
                 str(b.async_dispatch_count),
@@ -522,7 +559,7 @@ def _pretty_analysis(report) -> None:
                 ", ".join(b.models),
             )
         console.print(t)
-        if len(report.boundary_crossings) > 20:
+        if len(report.boundary_crossings) > limit:
             console.print(f"[dim]… +{len(report.boundary_crossings) - 20} more[/]")
         console.print()
 
@@ -536,10 +573,10 @@ def _pretty_analysis(report) -> None:
         t.add_column("entry", style="white")
         t.add_column("depth", justify="right", style="bold yellow")
         t.add_column("deepest reachable", style="dim")
-        for c in report.long_call_chains[:15]:
+        for c in report.long_call_chains[:limit]:
             t.add_row(c.entry_qname, str(c.depth), c.deepest_callee)
         console.print(t)
-        if len(report.long_call_chains) > 15:
+        if len(report.long_call_chains) > limit:
             console.print(
                 f"[dim]… +{len(report.long_call_chains) - 15} more chains[/]"
             )
@@ -555,10 +592,10 @@ def _pretty_analysis(report) -> None:
         t.add_column("method", style="bold")
         t.add_column("path", style="cyan")
         t.add_column("handlers", style="dim")
-        for c in report.path_collisions[:20]:
+        for c in report.path_collisions[:limit]:
             t.add_row(c.method, c.path, "\n".join(c.handlers))
         console.print(t)
-        if len(report.path_collisions) > 20:
+        if len(report.path_collisions) > limit:
             console.print(
                 f"[dim]… +{len(report.path_collisions) - 20} more collisions[/]"
             )
@@ -574,10 +611,10 @@ def _pretty_analysis(report) -> None:
         t.add_column("async function", style="white")
         t.add_column("blocking call", style="magenta")
         t.add_column("line", justify="right", style="dim")
-        for s in report.sync_in_async[:20]:
+        for s in report.sync_in_async[:limit]:
             t.add_row(s.async_qname, s.blocking_call, str(s.line))
         console.print(t)
-        if len(report.sync_in_async) > 20:
+        if len(report.sync_in_async) > limit:
             console.print(
                 f"[dim]… +{len(report.sync_in_async) - 20} more findings[/]"
             )
@@ -592,10 +629,10 @@ def _pretty_analysis(report) -> None:
         )
         t.add_column("#", justify="right", style="dim")
         t.add_column("cycle", style="white")
-        for i, cycle in enumerate(report.import_cycles[:20], 1):
+        for i, cycle in enumerate(report.import_cycles[:limit], 1):
             t.add_row(str(i), " → ".join(cycle.modules) + " → " + cycle.modules[0])
         console.print(t)
-        if len(report.import_cycles) > 20:
+        if len(report.import_cycles) > limit:
             console.print(
                 f"[dim]… +{len(report.import_cycles) - 20} more cycles[/]"
             )
@@ -711,12 +748,21 @@ def impact(path: Path | None, rename: str, output: Path | None) -> None:
     help="Restrict to one kind of dead symbol.",
 )
 @click.option(
+    "--limit",
+    default=50,
+    type=int,
+    show_default=True,
+    help="Max rows per kind-table before truncation.",
+)
+@click.option(
     "-o",
     "--output",
     type=click.Path(dir_okay=False, path_type=Path),
     help="Write findings as JSON to this file instead of printing a table.",
 )
-def dead(path: Path | None, kind: str | None, output: Path | None) -> None:
+def dead(
+    path: Path | None, kind: str | None, limit: int, output: Path | None
+) -> None:
     """Report functions and classes with zero incoming edges and no entry-point
     status — candidates for deletion, pending review for dynamic dispatch.
 
@@ -763,13 +809,16 @@ def dead(path: Path | None, kind: str | None, output: Path | None) -> None:
         )
         t.add_column("qname", style="dim")
         t.add_column("location", style="dim cyan")
-        for f in rows[:50]:
+        for f in rows[:limit]:
             fname = Path(f.source_path).name
             t.add_row(f.qname, f"{fname}:{f.line_start}")
         console.print(t)
-        if len(rows) > 50:
-            plural = "classes" if kind == "class" else f"{kind}s"
-            console.print(f"[dim]… +{len(rows) - 50} more {plural}[/]")
+        if len(rows) > limit:
+            plural_kind = kind if kind != "class" else "classe"
+            console.print(
+                f"[dim]… +{len(rows) - limit} more {plural_kind}s"
+                f" (raise --limit to see more)[/]"
+            )
         console.print()
 
     console.print(
