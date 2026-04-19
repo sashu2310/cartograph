@@ -526,6 +526,25 @@ def _pretty_analysis(report) -> None:
             console.print(f"[dim]… +{len(report.boundary_crossings) - 20} more[/]")
         console.print()
 
+    # Sync-in-async (framework-agnostic; curated blocking-symbol table)
+    if report.sync_in_async:
+        t = Table(
+            title=f"Sync-in-async ({len(report.sync_in_async)})",
+            title_style="bold magenta",
+            header_style="bold",
+        )
+        t.add_column("async function", style="white")
+        t.add_column("blocking call", style="magenta")
+        t.add_column("line", justify="right", style="dim")
+        for s in report.sync_in_async[:20]:
+            t.add_row(s.async_qname, s.blocking_call, str(s.line))
+        console.print(t)
+        if len(report.sync_in_async) > 20:
+            console.print(
+                f"[dim]… +{len(report.sync_in_async) - 20} more findings[/]"
+            )
+        console.print()
+
     # Import cycles (framework-agnostic; fires on any project)
     if report.import_cycles:
         t = Table(
@@ -550,6 +569,7 @@ def _pretty_analysis(report) -> None:
         or report.mixed_ops
         or report.boundary_crossings
         or report.import_cycles
+        or report.sync_in_async
     ):
         console.print(
             "[dim](no findings — either no ORM/async patterns, "
