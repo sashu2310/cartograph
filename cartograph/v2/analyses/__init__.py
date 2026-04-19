@@ -195,6 +195,59 @@ class DeadFunction(IR):
     line_start: int
 
 
+class CallSiteImpact(IR):
+    """One call site that would break under a rename."""
+
+    file: str
+    line: int
+    caller_qname: str
+
+
+class RenameImpact(IR):
+    """Everything that would break if `old_qname` is renamed to `new_name`.
+
+    v2.2 covers call sites directly (those have line numbers from the graph).
+    Import statements that reference the renamed symbol are flagged as a
+    manual-review note — `ImportStmt` doesn't carry line numbers today, and
+    adding them is a Stage 1 change deferred to v2.3.
+    """
+
+    old_qname: str
+    new_name: str
+    definition_file: str
+    definition_line: int
+    call_sites: tuple[CallSiteImpact, ...]
+
+
+def rename_impact(graph: AnalyzedGraph, old_qname: str, new_name: str) -> RenameImpact:
+    """Enumerate the call sites that need updating."""
+    resolved = graph.annotated.resolved
+    fn = resolved.functions.get(old_qname)
+    if fn is None:
+        raise ValueError(f"unknown qname: {old_qname}")
+
+    callers: list[CallSiteImpact] = []
+    for edge_idx in resolved.callers_by_callee.get(old_qname, ()):
+        edge = resolved.edges[edge_idx]
+        caller = resolved.functions.get(edge.caller_qname)
+        callers.append(
+            CallSiteImpact(
+                file=str(caller.source_path) if caller else "<unknown>",
+                line=edge.line,
+                caller_qname=edge.caller_qname,
+            )
+        )
+    callers.sort(key=lambda s: (s.file, s.line))
+
+    return RenameImpact(
+        old_qname=old_qname,
+        new_name=new_name,
+        definition_file=str(fn.source_path),
+        definition_line=fn.line_start,
+        call_sites=tuple(callers),
+    )
+
+
 def find_dead(graph: AnalyzedGraph) -> Iterator[DeadFunction]:
     """Functions/classes with zero incoming edges and no entry-point status.
 
