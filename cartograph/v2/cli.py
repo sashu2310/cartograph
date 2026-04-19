@@ -492,6 +492,75 @@ def _pretty_analysis(report) -> None:
 
 @main.command()
 @click.argument("path", type=click.Path(exists=True, path_type=Path), required=False)
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Write findings as JSON to this file instead of printing a table.",
+)
+def dead(path: Path | None, output: Path | None) -> None:
+    """Report functions and classes with zero incoming edges and no entry-point
+    status — candidates for deletion, pending review for dynamic dispatch.
+
+    Heuristic. May flag library-intended exports or code reached via getattr /
+    __getattr__ / string-indexed callable maps. Treat as a starting list."""
+    import json as _json
+
+    from rich.console import Console
+    from rich.table import Table
+
+    from cartograph.v2.analyses import find_dead
+
+    resolved_path = _resolve_path(path)
+    graph = asyncio.run(_build_graph(resolved_path, include_tests=False))
+    findings = list(find_dead(graph))
+
+    if output is not None:
+        payload = [f.model_dump() for f in findings]
+        output.write_text(_json.dumps(payload, indent=2))
+        click.echo(f"wrote {output} ({len(findings)} dead)", err=True)
+        return
+
+    if not findings:
+        click.echo("[no dead code found]")
+        return
+
+    console = Console()
+    # Group by kind for readability — classes and methods cluster separately
+    # from top-level functions.
+    by_kind: dict[str, list] = {}
+    for f in findings:
+        by_kind.setdefault(f.kind, []).append(f)
+
+    for kind in ("function", "method", "class"):
+        rows = sorted(by_kind.get(kind, []), key=lambda f: f.qname)
+        if not rows:
+            continue
+        t = Table(
+            title=f"dead {kind}s ({len(rows)})",
+            title_style="bold red",
+            header_style="bold",
+        )
+        t.add_column("qname", style="dim")
+        t.add_column("location", style="dim cyan")
+        for f in rows[:50]:
+            fname = Path(f.source_path).name
+            t.add_row(f.qname, f"{fname}:{f.line_start}")
+        console.print(t)
+        if len(rows) > 50:
+            plural = "classes" if kind == "class" else f"{kind}s"
+            console.print(f"[dim]… +{len(rows) - 50} more {plural}[/]")
+        console.print()
+
+    console.print(
+        "[dim]Heuristic: dynamic dispatch (getattr, __getattr__, "
+        "string-indexed callables) can bypass the static graph. "
+        "Review before deleting.[/]"
+    )
+
+
+@main.command()
+@click.argument("path", type=click.Path(exists=True, path_type=Path), required=False)
 def mcp(path: Path | None) -> None:
     """Run an MCP server (stdio) exposing the pipeline to agent hosts.
 
