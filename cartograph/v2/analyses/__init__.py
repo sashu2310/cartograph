@@ -95,6 +95,21 @@ class SyncInAsync(IR):
     line: int
 
 
+class PathCollision(IR):
+    """Two or more API route handlers registered at the same method + path.
+
+    Detected purely from Stage 4's ApiRouteEntry list (grouped by
+    (method, path)). Can surface false positives on codebases with
+    multiple independent FastAPI apps sharing URL shapes (e.g.
+    tutorial collections). Real collisions in a single app are a
+    silent bug — last registration wins at runtime.
+    """
+
+    method: str
+    path: str
+    handlers: tuple[str, ...]
+
+
 class AnalysisReport(IR):
     """Bundle of all analyses produced by `analyze()`."""
 
@@ -104,6 +119,7 @@ class AnalysisReport(IR):
     boundary_crossings: tuple[AsyncBoundaryCrossing, ...]
     import_cycles: tuple[ImportCycle, ...] = ()
     sync_in_async: tuple[SyncInAsync, ...] = ()
+    path_collisions: tuple[PathCollision, ...] = ()
 
 
 def find_n_plus_one(graph: AnalyzedGraph) -> Iterator[NPlusOneCandidate]:
@@ -208,7 +224,30 @@ def analyze(graph: AnalyzedGraph) -> AnalysisReport:
         boundary_crossings=tuple(find_async_boundary_crossings(graph)),
         import_cycles=tuple(find_import_cycles(graph)),
         sync_in_async=tuple(find_sync_in_async(graph)),
+        path_collisions=tuple(find_path_collisions(graph)),
     )
+
+
+def find_path_collisions(graph: AnalyzedGraph) -> Iterator[PathCollision]:
+    """Flag (method, path) pairs registered by ≥2 handlers.
+
+    Pure group-by on Stage 4's ApiRouteEntry list. One entry per
+    collision, sorted by (method, path) for stable output.
+    """
+    from cartograph.v2.ir.analyzed import ApiRouteEntry
+
+    by_key: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for ep in graph.entry_points:
+        if isinstance(ep, ApiRouteEntry):
+            by_key[(ep.method, ep.path)].append(ep.qname)
+
+    for (method, path), qnames in sorted(by_key.items()):
+        if len(qnames) > 1:
+            yield PathCollision(
+                method=method,
+                path=path,
+                handlers=tuple(sorted(qnames)),
+            )
 
 
 _BLOCKING_HINTS: dict[str, frozenset[str]] = {

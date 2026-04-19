@@ -526,6 +526,25 @@ def _pretty_analysis(report) -> None:
             console.print(f"[dim]… +{len(report.boundary_crossings) - 20} more[/]")
         console.print()
 
+    # Path collisions (FastAPI/Flask/Ninja routes sharing method+path)
+    if report.path_collisions:
+        t = Table(
+            title=f"Path collisions ({len(report.path_collisions)})",
+            title_style="bold red",
+            header_style="bold",
+        )
+        t.add_column("method", style="bold")
+        t.add_column("path", style="cyan")
+        t.add_column("handlers", style="dim")
+        for c in report.path_collisions[:20]:
+            t.add_row(c.method, c.path, "\n".join(c.handlers))
+        console.print(t)
+        if len(report.path_collisions) > 20:
+            console.print(
+                f"[dim]… +{len(report.path_collisions) - 20} more collisions[/]"
+            )
+        console.print()
+
     # Sync-in-async (framework-agnostic; curated blocking-symbol table)
     if report.sync_in_async:
         t = Table(
@@ -570,6 +589,7 @@ def _pretty_analysis(report) -> None:
         or report.boundary_crossings
         or report.import_cycles
         or report.sync_in_async
+        or report.path_collisions
     ):
         console.print(
             "[dim](no findings — either no ORM/async patterns, "
