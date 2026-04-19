@@ -13,14 +13,14 @@
 | 3 | Trace shows **call-site line** from the caller, not callee definition line | dogfood P1 | 1. correctness | ✅ | `93bfe04` |
 | 4 | Consistent entry-point rendering — shared `_pretty_entry_line` across scan/entries/context | dogfood P2 | 1. correctness | ✅ | `a907490` |
 | 5 | Classes surfaced in scan summary, codebase markdown, `/api/overview`, MCP `scan` | dogfood P2 | 1. correctness | ✅ | `a907490` |
-| 6 | Ranked search — function name scored above module-path match | dogfood P2 | 1. correctness | ⏳ | — |
-| 7 | Cache visibility — `(resolve cache hit — 2.4s)` footer | dogfood P3 | 1. correctness | ⏳ | — |
-| 8 | `carto2 context --answer "what calls X"` — question-scoped subgraph | v2.1 roadmap | 2. new queries | ⏳ | — |
-| 9 | `carto2 context --budget N` — token-budget-aware greedy BFS | v2.1 roadmap | 2. new queries | ⏳ | — |
-| 10 | `carto2 impact --rename old:new` — rename-impact analysis (read-only patch plan) | v2.1 roadmap | 2. new queries | ⏳ | — |
-| 11 | `carto2 dead` — dead-code report (unreachable from any entry point) | v2.1 roadmap | 2. new queries | ⏳ | — |
-| 12 | mtime Stage 1 fast path — `path → (mtime, hash)` secondary index | v2.1 roadmap | 3. perf | ⏳ | — |
-| 13 | **Decorator call semantics via type inference** — generic metadata extraction, annotators become thin translators | dogfood follow-up | 4. architectural | ⏳ | — |
+| 6 | Ranked search — function name scored above module-path match | dogfood P2 | 1. correctness | ✅ | `5266141` |
+| 7 | Cache visibility — `(resolve cache hit — 2.4s)` footer | dogfood P3 | 1. correctness | ✅ | `fcde908` |
+| 8 | `carto2 context --answer "what calls X"` — question-scoped subgraph | v2.1 roadmap | 2. new queries | ✅ | `8ffa4b1` |
+| 9 | `carto2 context --max-tokens N` — token-budget-aware greedy BFS | v2.1 roadmap | 2. new queries | ✅ | `8ffa4b1` |
+| 10 | `carto2 impact --rename old:new` — rename-impact analysis (read-only patch plan) | v2.1 roadmap | 2. new queries | ✅ | `2739e9b` |
+| 11 | `carto2 dead` — dead-code report (unreachable from any entry point) | v2.1 roadmap | 2. new queries | ✅ | `2c2deae` |
+| 12 | mtime Stage 1 fast path — `path → (mtime, hash)` secondary index | v2.1 roadmap | 3. perf | ✅ | `d8eeda5` |
+| 13 | **Decorator call semantics via type inference** — generic metadata extraction, annotators become thin translators | dogfood follow-up | 4. architectural | ✅ | `fcb96d4` |
 
 **Legend:** ✅ shipped · ⏳ pending · source = dogfood P0/P1/P2/P3 (newbie walkthrough on pydantic-ai) or v2.1 roadmap (the doc we wrote before the dogfood test).
 
@@ -93,4 +93,4 @@ The pitch for a Google talk becomes: *"topology for discovery, type inference fo
 
 ## Status snapshot
 
-5 of 13 items complete (1, 2, 3, 4, 5). Phase 1 ~70% done. See commit history on the `v2` branch for progress.
+**13 of 13 items complete.** v2.2 ready to push. 11 commits landed on the `v2` branch between `ba4e40d` (this doc) and `fcb96d4` (decorator call semantics). See `git log main..v2 --oneline` for the full series.
