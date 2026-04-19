@@ -23,6 +23,30 @@ class FunctionRef(IR):
     docstring: str | None = None
 
 
+class ResolvedDecorator(IR):
+    """A decorator whose target was resolved via LSP (or couldn't be).
+
+    `name` is the syntactic name as it appears in source (e.g., `app.get`).
+    `resolved_target` is what LSP pointed at:
+
+        - A project-internal qname (`myapp.auth.require_token`) if the
+          decorator's definition is in a file we extracted.
+        - An external-package hint (`fastapi`, `celery`, `django`) if the
+          definition lives in site-packages, derived from the resolved path.
+        - `None` if resolution failed.
+
+    Framework annotators match on `resolved_target` (prefix or exact),
+    not on syntactic `name`, so `@app.get` detects as FastAPI iff `app`
+    actually resolves into fastapi — not just because the name matches.
+    """
+
+    name: str
+    resolved_target: str | None
+    args: tuple[str, ...] = ()
+    kwargs: dict[str, str] = {}  # noqa: RUF012 — pydantic deep-copies defaults
+    line: int
+
+
 AsyncKind = Literal[
     "celery_delay",
     "celery_apply_async",
@@ -80,6 +104,10 @@ class ResolvedGraph(IR):
     functions: dict[str, FunctionRef]
     edges: tuple[Edge, ...] = ()
     unresolved: tuple[UnresolvedCall, ...] = ()
+    # Target qname → tuple of decorators applied to it, each carrying its
+    # resolved target. Empty means Stage 2 skipped decorator resolution —
+    # annotators must fall back to DecoratorSpec.name when that happens.
+    decorators_by_target: dict[str, tuple[ResolvedDecorator, ...]] = {}  # noqa: RUF012
 
     callees_by_caller: dict[str, tuple[int, ...]] = {}  # noqa: RUF012
     callers_by_callee: dict[str, tuple[int, ...]] = {}  # noqa: RUF012

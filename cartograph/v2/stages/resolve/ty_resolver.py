@@ -23,6 +23,7 @@ from cartograph.v2.ir.resolved import (
     ExternalUnresolved,
     FunctionRef,
     LspUnresolved,
+    ResolvedDecorator,
     ResolvedGraph,
     UnknownUnresolved,
     UnresolvedCall,
@@ -32,6 +33,7 @@ from cartograph.v2.ir.syntactic import (
     AsyncOrchestrationCall,
     CallKind,
     CallSite,
+    DecoratorSpec,
     MethodCall,
     PlainCall,
     SyntacticModule,
@@ -135,12 +137,16 @@ async def _resolve_via_lsp(
         functions = _build_function_refs(modules)
 
         edges, unresolved = await _resolve_all_calls(server, modules, function_index)
+        decorators_by_target = await _resolve_all_decorators(
+            server, modules, function_index
+        )
 
         return Ok(
             value=ResolvedGraph(
                 functions=functions,
                 edges=tuple(edges),
                 unresolved=tuple(unresolved),
+                decorators_by_target=decorators_by_target,
             )
         )
 
@@ -161,6 +167,110 @@ async def _open_all(server: LspServer, modules: Iterable[SyntacticModule]) -> No
         except OSError:
             continue
         await server.did_open(uri, text)
+
+
+async def _resolve_all_decorators(
+    server: LspServer,
+    modules: tuple[SyntacticModule, ...],
+    function_index: dict[str, list[tuple[int, int, str]]],
+) -> dict[str, tuple[ResolvedDecorator, ...]]:
+    """Resolve every decorator's target via LSP, keyed by the function or
+    class the decorator is applied to.
+
+    A decorator with `line == 0` is skipped (position unknown — Stage 1
+    didn't capture it, or the IR is from a pre-v2.2 cache). Resolution
+    failures land as `ResolvedDecorator(resolved_target=None, ...)` so the
+    annotators see the decorator existed but couldn't be typed.
+    """
+    tasks: list[asyncio.Task[tuple[str, ResolvedDecorator]]] = []
+    for module in modules:
+        module_uri = _path_to_uri(module.path)
+        for func in module.functions:
+            for dec in func.decorators:
+                if dec.line > 0:
+                    tasks.append(
+                        asyncio.create_task(
+                            _resolve_one_decorator(
+                                server,
+                                func.qname,
+                                dec,
+                                module_uri,
+                                function_index,
+                            )
+                        )
+                    )
+        for cls in module.classes:
+            for dec in cls.decorators:
+                if dec.line > 0:
+                    tasks.append(
+                        asyncio.create_task(
+                            _resolve_one_decorator(
+                                server,
+                                cls.qname,
+                                dec,
+                                module_uri,
+                                function_index,
+                            )
+                        )
+                    )
+
+    if not tasks:
+        return {}
+
+    results = await asyncio.gather(*tasks)
+    by_target: dict[str, list[ResolvedDecorator]] = {}
+    for target_qname, resolved_dec in results:
+        by_target.setdefault(target_qname, []).append(resolved_dec)
+    return {k: tuple(v) for k, v in by_target.items()}
+
+
+async def _resolve_one_decorator(
+    server: LspServer,
+    applied_to_qname: str,
+    dec: DecoratorSpec,
+    module_uri: str,
+    function_index: dict[str, list[tuple[int, int, str]]],
+) -> tuple[str, ResolvedDecorator]:
+    """Resolve one decorator; return (applied_to_qname, ResolvedDecorator)."""
+    lsp_line = dec.line - 1  # IR is 1-based; LSP is 0-based.
+    try:
+        locations = await server.definition(
+            module_uri, line=lsp_line, character=dec.col
+        )
+    except (LspTimeoutError, LspError):
+        return applied_to_qname, ResolvedDecorator(
+            name=dec.name,
+            resolved_target=None,
+            args=dec.args,
+            kwargs=dec.kwargs,
+            line=dec.line,
+        )
+
+    resolved_target: str | None = None
+    if locations:
+        loc = locations[0]
+        target_uri = loc.get("uri") or loc.get("targetUri")
+        target_range = (
+            loc.get("range") or loc.get("targetSelectionRange") or loc.get("targetRange")
+        )
+        if target_uri and target_range:
+            target_path = _uri_to_path_str(target_uri)
+            target_line_1 = target_range.get("start", {}).get("line", 0) + 1
+            # Project-internal: look up the qname.
+            internal = _find_function_at(function_index, target_path, target_line_1)
+            if internal is not None:
+                resolved_target = internal
+            else:
+                # External: best-effort site-packages hint.
+                resolved_target = _target_module_hint(target_uri)
+
+    return applied_to_qname, ResolvedDecorator(
+        name=dec.name,
+        resolved_target=resolved_target,
+        args=dec.args,
+        kwargs=dec.kwargs,
+        line=dec.line,
+    )
 
 
 async def _resolve_all_calls(

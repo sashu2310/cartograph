@@ -1,14 +1,14 @@
-"""@receiver(signal, sender=...), gated on django.dispatch import.
+"""Django signals annotator — resolved-target first, syntactic fallback.
 
-`@receiver` is a common-enough word that we can't rely on the decorator name
-alone — libraries outside Django also define `receiver` functions/decorators.
-Per-module gate on `django.dispatch` avoids those false positives.
+`@receiver(signal, sender=…)`. Resolving `receiver` lets us confirm it's
+actually `django.dispatch.receiver` and not some other `receiver` decorator
+from an unrelated library.
 """
 
 from __future__ import annotations
 
 from cartograph.v2.ir.annotated import DjangoSignalLabel, SemanticLabel
-from cartograph.v2.ir.resolved import ResolvedGraph
+from cartograph.v2.ir.resolved import ResolvedDecorator, ResolvedGraph
 from cartograph.v2.ir.syntactic import DecoratorSpec, SyntacticModule
 
 
@@ -21,14 +21,57 @@ class DjangoSignalsAnnotator:
         modules: dict[str, SyntacticModule],
     ) -> dict[str, tuple[SemanticLabel, ...]]:
         out: dict[str, list[SemanticLabel]] = {}
-        for module in modules.values():
-            if not _has_dispatch_import(module):
-                continue
-            for func in module.functions:
-                label = _match_receiver(func.decorators)
-                if label is not None:
-                    out.setdefault(func.qname, []).append(label)
+
+        for qname, resolved_decs in graph.decorators_by_target.items():
+            label = _match_resolved(resolved_decs)
+            if label is not None:
+                out.setdefault(qname, []).append(label)
+
+        if not graph.decorators_by_target:
+            for module in modules.values():
+                if not _has_dispatch_import(module):
+                    continue
+                for func in module.functions:
+                    label = _match_syntactic(func.decorators)
+                    if label is not None:
+                        out.setdefault(func.qname, []).append(label)
+
         return {qname: tuple(ls) for qname, ls in out.items()}
+
+
+def _match_resolved(resolved: tuple[ResolvedDecorator, ...]) -> SemanticLabel | None:
+    for rdec in resolved:
+        target = rdec.resolved_target or ""
+        if not target.startswith("django.dispatch") and not target.startswith("django"):
+            continue
+        if rdec.name != "receiver":
+            continue
+        return _label_for(rdec)
+    return None
+
+
+def _match_syntactic(
+    decorators: tuple[DecoratorSpec, ...],
+) -> SemanticLabel | None:
+    for dec in decorators:
+        if dec.name != "receiver":
+            continue
+        return _label_for(dec)
+    return None
+
+
+def _label_for(spec: ResolvedDecorator | DecoratorSpec) -> SemanticLabel:
+    signal_name: str | None = None
+    if spec.args:
+        signal_name = spec.args[0]
+    elif "signal" in spec.kwargs:
+        signal_name = spec.kwargs["signal"]
+    sender = spec.kwargs.get("sender")
+    return DjangoSignalLabel(
+        framework="django",
+        signal_name=signal_name or "unknown",
+        sender=sender,
+    )
 
 
 def _has_dispatch_import(module: SyntacticModule) -> bool:
@@ -39,30 +82,3 @@ def _has_dispatch_import(module: SyntacticModule) -> bool:
         if mod == "django.dispatch" and imp.name == "receiver":
             return True
     return False
-
-
-def _match_receiver(
-    decorators: tuple[DecoratorSpec, ...],
-) -> SemanticLabel | None:
-    for dec in decorators:
-        if dec.name != "receiver":
-            continue
-
-        # Signal name can be positional or via `signal=` kwarg.
-        signal_name: str | None = None
-        if dec.args:
-            signal_name = dec.args[0]
-        elif "signal" in dec.kwargs:
-            signal_name = dec.kwargs["signal"]
-
-        sender = dec.kwargs.get("sender")
-
-        # Fall back to "unknown" when the signal name couldn't be captured
-        # (e.g., passed as a variable). Still worth emitting a label so the
-        # downstream discoverer can promote to SignalHandlerEntry.
-        return DjangoSignalLabel(
-            framework="django",
-            signal_name=signal_name or "unknown",
-            sender=sender,
-        )
-    return None

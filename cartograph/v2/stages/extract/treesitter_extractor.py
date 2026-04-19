@@ -379,7 +379,12 @@ class _Walker:
         return parts
 
     def _decorator_spec(self, node: Node) -> DecoratorSpec | None:
-        """Parse a `decorator` node into a DecoratorSpec."""
+        """Parse a `decorator` node into a DecoratorSpec.
+
+        Captures the target identifier's (line, col) so Stage 2 can resolve
+        it via LSP — e.g., for `@app.get("/x")` the position lands on
+        `app.get`, which is what `textDocument/definition` needs.
+        """
         # Decorator body is after the `@`. Structure depends on tree-sitter grammar:
         # decorator → `@` (identifier | attribute | call) newline
         body = None
@@ -390,13 +395,24 @@ class _Walker:
             return None
 
         if body.type == "identifier":
-            return DecoratorSpec(name=self._text(body))
+            line = body.start_point[0] + 1
+            col = body.start_point[1]
+            return DecoratorSpec(name=self._text(body), line=line, col=col)
 
         if body.type == "attribute":
             chain = self._attribute_chain(body)
             if not chain:
                 return None
-            return DecoratorSpec(name=".".join(chain))
+            # Position on the trailing identifier — best LSP target for
+            # `app.get` is the `get` segment, not `app`.
+            attr_node = body.child_by_field_name("attribute")
+            if attr_node is not None:
+                line = attr_node.start_point[0] + 1
+                col = attr_node.start_point[1]
+            else:
+                line = body.start_point[0] + 1
+                col = body.start_point[1]
+            return DecoratorSpec(name=".".join(chain), line=line, col=col)
 
         if body.type == "call":
             func_node = body.child_by_field_name("function")
@@ -404,15 +420,26 @@ class _Walker:
                 return None
             if func_node.type == "identifier":
                 name = self._text(func_node)
+                dec_line = func_node.start_point[0] + 1
+                dec_col = func_node.start_point[1]
             elif func_node.type == "attribute":
                 chain = self._attribute_chain(func_node)
                 if not chain:
                     return None
                 name = ".".join(chain)
+                attr_node = func_node.child_by_field_name("attribute")
+                if attr_node is not None:
+                    dec_line = attr_node.start_point[0] + 1
+                    dec_col = attr_node.start_point[1]
+                else:
+                    dec_line = func_node.start_point[0] + 1
+                    dec_col = func_node.start_point[1]
             else:
                 return None
             args, kwargs = self._parse_call_arguments(body)
-            return DecoratorSpec(name=name, args=args, kwargs=kwargs)
+            return DecoratorSpec(
+                name=name, args=args, kwargs=kwargs, line=dec_line, col=dec_col
+            )
 
         return None
 

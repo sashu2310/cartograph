@@ -11,12 +11,23 @@ from cartograph.v2.ir.base import IR
 
 
 class DecoratorSpec(IR):
-    """Decorator name plus literal-constant args. Non-constants are dropped;
-    values are stringified so the IR stays JSON-friendly."""
+    """Decorator name plus literal-constant args.
+
+    `line` and `col` locate the decorator's target identifier (the `app.get`
+    part of `@app.get("/x")`) so Stage 2 can resolve it via LSP
+    `textDocument/definition`, the same way call sites get resolved. Values
+    of 0 mean the extractor didn't capture position — the annotator falls
+    back to name-based matching in that case.
+
+    Non-constant args are dropped; values are stringified so the IR stays
+    JSON-friendly.
+    """
 
     name: str
     args: tuple[str, ...] = ()
     kwargs: dict[str, str] = {}  # noqa: RUF012 — pydantic deep-copies defaults
+    line: int = 0
+    col: int = 0
 
 
 class ImportStmt(IR):
