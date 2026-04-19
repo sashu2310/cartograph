@@ -330,15 +330,39 @@ def explain(qname: str, path: Path | None, depth: int, model: str | None) -> Non
 @click.argument("qname", required=False)
 @click.argument("path", type=click.Path(exists=True, path_type=Path), required=False)
 @click.option("--depth", default=5, type=int, show_default=True)
-def context(qname: str | None, path: Path | None, depth: int) -> None:
+@click.option(
+    "--answer",
+    default=None,
+    help='Question-scoped markdown. Examples: "what calls X", "callers of X", "what does X call", "flow of X".',
+)
+@click.option(
+    "--max-tokens",
+    default=None,
+    type=int,
+    help="Cap the flow-context output at ~N tokens (greedy BFS; chars/4 approximation).",
+)
+def context(
+    qname: str | None,
+    path: Path | None,
+    depth: int,
+    answer: str | None,
+    max_tokens: int | None,
+) -> None:
     """Emit graph-as-markdown for piping to external LLMs.
 
     \b
     Usage:
       carto2 context | claude "explain this codebase"
       carto2 context checkout | claude "explain this flow"
-      carto2 context /path/to/repo | claude "explain"
+      carto2 context --answer "what calls checkout" | claude
+      carto2 context checkout --max-tokens 2000 | claude
     """
+    from cartograph.v2.stages.present.markdown import (
+        callees_markdown,
+        callers_markdown,
+        parse_answer_question,
+    )
+
     # context has two optional positional args; users often pass ONLY a path
     # (e.g. `carto2 context /tmp/fastapi`). Detect that and re-bind so the
     # arg becomes `path`, not `qname`.
@@ -348,11 +372,31 @@ def context(qname: str | None, path: Path | None, depth: int) -> None:
 
     resolved_path = _resolve_path(path)
     graph = asyncio.run(_build_graph(resolved_path, include_tests=False))
+
+    if answer is not None:
+        parsed = parse_answer_question(answer)
+        if parsed is None:
+            raise click.ClickException(
+                f"couldn't parse question: {answer!r}. Try: "
+                '"what calls X", "what does X call", "flow of X".'
+            )
+        kind, target = parsed
+        resolved_qname = _require_qname(graph.annotated.resolved.functions, target)
+        if kind == "callers":
+            click.echo(callers_markdown(graph, resolved_qname))
+        elif kind == "callees":
+            click.echo(callees_markdown(graph, resolved_qname))
+        else:  # flow
+            click.echo(
+                flow_markdown(graph, resolved_qname, depth, max_tokens=max_tokens)
+            )
+        return
+
     if qname is None:
         click.echo(codebase_markdown(graph))
     else:
         qname = _require_qname(graph.annotated.resolved.functions, qname)
-        click.echo(flow_markdown(graph, qname, depth))
+        click.echo(flow_markdown(graph, qname, depth, max_tokens=max_tokens))
 
 
 @main.command()
@@ -510,7 +554,6 @@ def impact(path: Path | None, rename: str, output: Path | None) -> None:
     enumerated (ImportStmt doesn't carry line numbers in the IR); the
     footer notes this so users can grep for lingering references.
     """
-    import json as _json
 
     from rich.console import Console
     from rich.table import Table
