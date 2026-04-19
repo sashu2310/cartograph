@@ -165,6 +165,31 @@ def build_server(project_root: Path) -> FastMCP:
         g = await graph()
         return run_analyses(g).model_dump()
 
+    @mcp.tool
+    async def dead() -> list[dict[str, Any]]:
+        """Functions and classes with zero incoming edges and no entry-point
+        status — candidates for deletion pending dynamic-dispatch review.
+        Dunder methods, `main`, `__main__`, and classes whose methods have
+        callers are excluded."""
+        from cartograph.v2.analyses import find_dead
+
+        g = await graph()
+        return [item.model_dump() for item in find_dead(g)]
+
+    @mcp.tool
+    async def impact(old_qname: str, new_name: str) -> dict[str, Any]:
+        """Rename-impact — enumerate every call site AND every import
+        statement that would break if `old_qname` were renamed to `new_name`.
+        Read-only. Returns `RenameImpact` with `call_sites` + `import_sites`
+        tuples, each carrying exact file:line."""
+        from cartograph.v2.analyses import rename_impact
+
+        g = await graph()
+        resolved_qname = _resolve_qname(g.annotated.resolved.functions, old_qname)
+        if resolved_qname is None:
+            raise ValueError(f"unknown qname: {old_qname}")
+        return rename_impact(g, resolved_qname, new_name).model_dump()
+
     return mcp
 
 
