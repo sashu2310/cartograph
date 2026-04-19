@@ -6,7 +6,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from cartograph.v2 import cli as cli_module
+from cartograph.v2.cli import _shared as cli_module
 from cartograph.v2.cli import main
 
 
@@ -72,9 +72,9 @@ class TestPathResolution:
     def test_init_persists_then_scan_resolves(self, monkeypatch, tmp_path):
         """init writes last-project; subsequent _resolve_path() picks it up."""
         monkeypatch.setattr(cli_module, "_LAST_PROJECT_FILE", tmp_path / "last")
-        cli_module._save_last_project(tmp_path)
-        assert cli_module._get_last_project() == tmp_path.resolve()
-        assert cli_module._resolve_path(None) == tmp_path.resolve()
+        cli_module.save_last_project(tmp_path)
+        assert cli_module.get_last_project() == tmp_path.resolve()
+        assert cli_module.resolve_path(None) == tmp_path.resolve()
 
 
 class TestQnameResolution:
@@ -82,20 +82,20 @@ class TestQnameResolution:
 
     def test_exact_match_wins(self):
         fns = {"a.b.checkout": object(), "x.y.z": object()}
-        assert cli_module._resolve_qname(fns, "a.b.checkout") == "a.b.checkout"
+        assert cli_module.resolve_qname(fns, "a.b.checkout") == "a.b.checkout"
 
     def test_unique_suffix_resolves(self):
         fns = {"a.b.checkout": object(), "x.y.z": object()}
-        assert cli_module._resolve_qname(fns, "checkout") == "a.b.checkout"
+        assert cli_module.resolve_qname(fns, "checkout") == "a.b.checkout"
 
     def test_substring_fallback(self):
         fns = {"pkg.mod.checkout_flow": object(), "pkg.mod.unrelated": object()}
         # 'checkout' is not a suffix but is a substring
-        assert cli_module._resolve_qname(fns, "checkout") == "pkg.mod.checkout_flow"
+        assert cli_module.resolve_qname(fns, "checkout") == "pkg.mod.checkout_flow"
 
     def test_no_match_returns_none(self):
         fns = {"a.b.foo": object()}
-        assert cli_module._resolve_qname(fns, "zzzz") is None
+        assert cli_module.resolve_qname(fns, "zzzz") is None
 
     def test_suggestions_are_substring_hits(self):
         fns = {
@@ -103,7 +103,7 @@ class TestQnameResolution:
             "a.b.check": object(),
             "x.y.unrelated": object(),
         }
-        hints = cli_module._qname_suggestions(fns, "check", n=3)
+        hints = cli_module.qname_suggestions(fns, "check", n=3)
         assert set(hints) == {"a.b.checkout", "a.b.check"}
 
     def test_require_qname_raises_with_suggestions(self):
@@ -113,7 +113,7 @@ class TestQnameResolution:
         import pytest
 
         with pytest.raises(click.ClickException) as excinfo:
-            cli_module._require_qname(fns, "zzz_no_match_zzz")
+            cli_module.require_qname(fns, "zzz_no_match_zzz")
         assert "unknown qname" in str(excinfo.value.message)
 
 
