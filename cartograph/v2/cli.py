@@ -96,14 +96,43 @@ def _build_pipeline(server: LspServer) -> Pipeline:
 
 
 async def _build_graph(path: Path, include_tests: bool) -> AnalyzedGraph:
+    import time
+
+    stats: dict[str, object] = {}
+    start = time.perf_counter()
     async with LspServer(["ty", "server"]) as server:
         pipeline = _build_pipeline(server)
         result = await pipeline.build(
-            RunConfig(project_root=path, include_tests=include_tests)
+            RunConfig(project_root=path, include_tests=include_tests),
+            stats=stats,
         )
+    elapsed = time.perf_counter() - start
     if is_err(result):
         raise click.ClickException(f"pipeline failed: {result.error}")
+    _print_cache_footer(stats, elapsed)
     return result.value
+
+
+def _print_cache_footer(stats: dict[str, object], elapsed: float) -> None:
+    """Single-line cache + timing summary on stderr.
+
+    Format: `(2.4s · resolve: hit · extract: 42/42 hit)`
+    On stderr so it never contaminates pipes like `carto2 context | claude`.
+    """
+    parts = [f"{elapsed:.2f}s"]
+    resolve_hit = stats.get("resolve_cache_hit")
+    if resolve_hit is True:
+        parts.append("[green]resolve: hit[/]")
+    elif resolve_hit is False:
+        parts.append("[yellow]resolve: miss[/]")
+    extract_hits = int(stats.get("extract_hits", 0) or 0)
+    extract_misses = int(stats.get("extract_misses", 0) or 0)
+    total = extract_hits + extract_misses
+    if total > 0:
+        parts.append(f"extract: {extract_hits}/{total} hit")
+    from rich.console import Console
+
+    Console(stderr=True).print(f"[dim]({' · '.join(parts)})[/]")
 
 
 def _verbose_callback(ctx, param, value):

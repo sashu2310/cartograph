@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import logfire
 
@@ -35,15 +36,26 @@ class Pipeline:
     discoverer: Discoverer
     presenter: Presenter
 
-    async def build(self, config: RunConfig) -> Ok[AnalyzedGraph] | Err_[PipelineError]:
-        """Run stages 1-4 and return the final AnalyzedGraph."""
+    async def build(
+        self,
+        config: RunConfig,
+        stats: dict[str, Any] | None = None,
+    ) -> Ok[AnalyzedGraph] | Err_[PipelineError]:
+        """Run stages 1-4 and return the final AnalyzedGraph.
+
+        If `stats` is provided, the pipeline populates it with cache
+        hit/miss counts so CLI callers can surface a footer:
+
+            stats["extract_hits"], stats["extract_misses"],
+            stats["resolve_cache_hit"], stats["module_count"]
+        """
         with logfire.span(
             "pipeline.build",
             project_root=str(config.project_root),
             resolver=self.resolver.name,
         ):
             # Stage 1: Extract
-            modules = tuple(_extract_all(self.extractor, config))
+            modules = tuple(_extract_all(self.extractor, config, stats=stats))
             if not modules:
                 return Err_(
                     error=PipelineError(
@@ -51,6 +63,8 @@ class Pipeline:
                         detail="no modules extracted from project",
                     )
                 )
+            if stats is not None:
+                stats["module_count"] = len(modules)
             logfire.info("stage 1 complete", module_count=len(modules))
 
             # Stage 2: Resolve (with optional whole-graph cache)
@@ -70,8 +84,12 @@ class Pipeline:
                 resolved = resolve_cache.get(resolve_key)
                 if resolved is not None:
                     logfire.info("resolve cache hit", key=resolve_key[:12])
+                    if stats is not None:
+                        stats["resolve_cache_hit"] = True
 
             if resolved is None:
+                if stats is not None:
+                    stats["resolve_cache_hit"] = False
                 resolved_result = await self.resolver.resolve(
                     modules, config.project_root
                 )
@@ -125,7 +143,11 @@ class Pipeline:
         return Ok(value=rendered)
 
 
-def _extract_all(extractor: Extractor, config: RunConfig) -> Iterator[SyntacticModule]:
+def _extract_all(
+    extractor: Extractor,
+    config: RunConfig,
+    stats: dict[str, Any] | None = None,
+) -> Iterator[SyntacticModule]:
     """Walk the project and extract each file, with optional Stage 1 cache."""
     cache = ExtractCache(config.project_root) if config.use_cache else None
     hits = 0
@@ -157,6 +179,9 @@ def _extract_all(extractor: Extractor, config: RunConfig) -> Iterator[SyntacticM
         yield result.value
     if cache is not None:
         logfire.info("extract cache", hits=hits, misses=misses)
+    if stats is not None:
+        stats["extract_hits"] = hits
+        stats["extract_misses"] = misses
 
 
 def scan_python_files(config: RunConfig) -> Iterator[tuple[Path, str]]:
