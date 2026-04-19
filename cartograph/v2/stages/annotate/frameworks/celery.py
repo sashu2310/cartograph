@@ -1,4 +1,4 @@
-"""@celery_app.task / @shared_task / @app.task, with queue + bind kwargs."""
+"""@celery_app.task / @shared_task / @app.task, gated on celery import."""
 
 from __future__ import annotations
 
@@ -19,11 +19,22 @@ class CeleryAnnotator:
     ) -> dict[str, tuple[SemanticLabel, ...]]:
         out: dict[str, list[SemanticLabel]] = {}
         for module in modules.values():
+            if not _has_celery_import(module):
+                continue
             for func in module.functions:
                 label = _match_task(func.decorators)
                 if label is not None:
                     out.setdefault(func.qname, []).append(label)
         return {qname: tuple(ls) for qname, ls in out.items()}
+
+
+def _has_celery_import(module: SyntacticModule) -> bool:
+    for imp in module.imports:
+        if imp.module and "celery" in imp.module:
+            return True
+        if imp.name in ("Celery", "shared_task"):
+            return True
+    return False
 
 
 def _match_task(decorators: tuple[DecoratorSpec, ...]) -> SemanticLabel | None:

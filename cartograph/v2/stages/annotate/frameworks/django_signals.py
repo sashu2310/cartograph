@@ -1,4 +1,9 @@
-"""@receiver(signal, sender=...). No import gate — decorator name is distinctive."""
+"""@receiver(signal, sender=...), gated on django.dispatch import.
+
+`@receiver` is a common-enough word that we can't rely on the decorator name
+alone — libraries outside Django also define `receiver` functions/decorators.
+Per-module gate on `django.dispatch` avoids those false positives.
+"""
 
 from __future__ import annotations
 
@@ -17,11 +22,23 @@ class DjangoSignalsAnnotator:
     ) -> dict[str, tuple[SemanticLabel, ...]]:
         out: dict[str, list[SemanticLabel]] = {}
         for module in modules.values():
+            if not _has_dispatch_import(module):
+                continue
             for func in module.functions:
                 label = _match_receiver(func.decorators)
                 if label is not None:
                     out.setdefault(func.qname, []).append(label)
         return {qname: tuple(ls) for qname, ls in out.items()}
+
+
+def _has_dispatch_import(module: SyntacticModule) -> bool:
+    for imp in module.imports:
+        mod = imp.module or ""
+        if mod.startswith("django.dispatch"):
+            return True
+        if mod == "django.dispatch" and imp.name == "receiver":
+            return True
+    return False
 
 
 def _match_receiver(

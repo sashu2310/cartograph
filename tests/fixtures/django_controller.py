@@ -1,4 +1,10 @@
-"""Fixture: Django Ninja controller patterns."""
+"""Fixture: Django Ninja controller patterns.
+
+Statically parsed only; the ninja import below makes our annotator's
+import gate pass. Local stubs below shadow at runtime.
+"""
+
+from ninja import Router as _Router  # noqa: F401
 
 
 def api_controller(path, **kwargs):

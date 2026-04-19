@@ -1,4 +1,4 @@
-"""Django Ninja: @route.get/post/... joined with the class's @api_controller prefix."""
+"""Django Ninja: @route.get/post/... joined with @api_controller prefix. Gated on ninja import."""
 
 from __future__ import annotations
 
@@ -30,6 +30,8 @@ class DjangoNinjaAnnotator:
     ) -> dict[str, tuple[SemanticLabel, ...]]:
         out: dict[str, list[SemanticLabel]] = {}
         for module in modules.values():
+            if not _has_ninja_import(module):
+                continue
             # Pre-compute per-class URL prefixes from class decorators.
             class_prefixes = _class_url_prefixes(module.classes)
 
@@ -38,6 +40,16 @@ class DjangoNinjaAnnotator:
                 if label is not None:
                     out.setdefault(func.qname, []).append(label)
         return {qname: tuple(ls) for qname, ls in out.items()}
+
+
+def _has_ninja_import(module: SyntacticModule) -> bool:
+    for imp in module.imports:
+        mod = imp.module or ""
+        if mod.startswith("ninja") or mod.startswith("django_ninja"):
+            return True
+        if imp.name in ("NinjaAPI", "Router", "api_controller"):
+            return True
+    return False
 
 
 def _class_url_prefixes(

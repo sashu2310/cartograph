@@ -1,7 +1,13 @@
-"""Fixture: Django ORM operation patterns."""
+"""Fixture: Django ORM operation patterns.
+
+Statically parsed only; not imported at runtime, so the django.db import
+below is safe even in environments without django installed.
+"""
+
+from django.db import models
 
 
-class Sensor:
+class Sensor(models.Model):
     class objects:  # noqa: N801
         @staticmethod
         def filter(**kwargs):
@@ -16,7 +22,7 @@ class Sensor:
             return []
 
 
-class Equipment:
+class Equipment(models.Model):
     class objects:  # noqa: N801
         @staticmethod
         def get(id=None):

@@ -1,4 +1,11 @@
-"""Fixture: Django signal patterns."""
+"""Fixture: Django signal patterns.
+
+Statically parsed only; the django.dispatch import below makes our
+annotator's import gate pass. Local `receiver` stub below shadows it at
+runtime for any future test that actually imports this file.
+"""
+
+from django.dispatch import receiver as _dispatch_receiver  # noqa: F401
 
 
 def receiver(*args, **kwargs):
