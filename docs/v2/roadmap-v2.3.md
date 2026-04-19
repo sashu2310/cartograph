@@ -31,6 +31,7 @@ Skipping v2.4 as a release label, so v2.3 packs more. Organized by **cleanup →
 | 19 | Test-edge annotations | action: ambitious | v2.1 roadmap deferred | Shadow-scan `tests/` dir, compute reachability from test entries into main graph, flag each edge with `has_test_coverage: bool`. Gold for refactor confidence. |
 | 20 | `carto2 diff <sha1> <sha2>` | action: ambitious | v2.1 roadmap deferred | Graph-diff between commits. Cache graphs keyed by commit SHA; set-diff edges/entries/labels. Code-review killer feature. |
 | 21 | Type-surface exposure at call sites | action: ambitious | v2.1 roadmap deferred | Use `ty`'s hover to attach resolved arg/return types to `Edge` metadata. Lets agents answer "what fields does this expect" without reading the class def. |
+| 22 | Web UI: generic, data-driven legend | action: UX | dogfood (celery swatch shown on non-celery project) | Legend was static HTML with framework-named swatches. Render only kinds actually present in the graph. |
 
 **Legend:** *cleanup* = pays down v2.2 debt; *refactor* = structural change, no new behaviour; *action* = new user-visible feature; *ambitious* = tier-4 stretches kept in scope because we're skipping v2.4.
 
@@ -68,4 +69,5 @@ Better to ship a substantial v2.3 and pause for real usage than ship v2.3-small 
 
 ## Status snapshot
 
-**0 of 21 items complete.** v2.3 work kicks off on the `v2` branch immediately after v2.2's last commit (`17d47a3`).
+**13 of 22 items complete** (items 1–12 + the new #22 UI fix).
+Commits land one-per-item on the `v2` branch. See `git log origin/v2..v2` for the unpushed stack.
