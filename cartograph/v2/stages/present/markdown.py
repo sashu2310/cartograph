@@ -13,7 +13,7 @@ from cartograph.v2.ir.analyzed import AnalyzedGraph
 
 def codebase_markdown(graph: AnalyzedGraph) -> str:
     """Codebase-level markdown. No source snippets — LLMs read files themselves."""
-    from cartograph.v2.stages.present.cli import (
+    from cartograph.v2.stages.present.util import (
         bucket_unresolved,
         top_classes_by_usage,
     )

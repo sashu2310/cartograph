@@ -16,7 +16,7 @@ from cartograph.v2.ir.resolved import Edge, FunctionRef, ResolvedGraph
 
 
 def serialize_overview(graph: AnalyzedGraph, project_name: str) -> dict[str, Any]:
-    from cartograph.v2.stages.present.cli import bucket_unresolved
+    from cartograph.v2.stages.present.util import bucket_unresolved
 
     resolved = graph.annotated.resolved
     entry_points_by_type: dict[str, list[dict[str, Any]]] = {}
@@ -119,7 +119,7 @@ def serialize_callers(graph: AnalyzedGraph, qname: str) -> dict[str, Any]:
 def serialize_search(
     graph: AnalyzedGraph, query: str, limit: int = 20
 ) -> dict[str, Any]:
-    from cartograph.v2.stages.present.cli import ranked_search
+    from cartograph.v2.stages.present.util import ranked_search
 
     resolved = graph.annotated.resolved
     entry_qnames = {ep.qname for ep in graph.entry_points}

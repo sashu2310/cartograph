@@ -92,7 +92,7 @@ def build_server(project_root: Path) -> FastMCP:
         entry-point counts. `unresolved_by_reason` breaks the total down
         into buckets (builtin / external / lsp / unknown) so a 10K count
         can be read correctly as "mostly stdlib" rather than a failure."""
-        from cartograph.v2.stages.present.cli import bucket_unresolved
+        from cartograph.v2.stages.present.util import bucket_unresolved
 
         g = await graph()
         resolved = g.annotated.resolved

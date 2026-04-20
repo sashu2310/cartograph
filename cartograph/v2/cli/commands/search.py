@@ -22,7 +22,7 @@ def search(query: str, path: Path | None, limit: int) -> None:
     """
     from rich.console import Console
 
-    from cartograph.v2.stages.present.cli import ranked_search
+    from cartograph.v2.stages.present.util import ranked_search
 
     resolved_path = resolve_path(path)
     graph = build_graph(resolved_path, include_tests=False)

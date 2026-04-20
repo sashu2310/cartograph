@@ -21,7 +21,7 @@ def pretty_scan(graph: AnalyzedGraph, project_root: Path) -> None:
     from rich.table import Table
     from rich.text import Text
 
-    from cartograph.v2.stages.present.cli import (
+    from cartograph.v2.stages.present.util import (
         bucket_unresolved,
         top_classes_by_usage,
     )
