@@ -160,6 +160,24 @@ class LspServer:
             return [result]
         return list(result)
 
+    async def hover(
+        self, uri: str, line: int, character: int
+    ) -> str | None:
+        """`textDocument/hover` flattened to a single string (see LSP spec)."""
+        result = await self._require_client().request(
+            "textDocument/hover",
+            {
+                "textDocument": {"uri": uri},
+                "position": {"line": line, "character": character},
+            },
+        )
+        if result is None:
+            return None
+        contents = result.get("contents")
+        if contents is None:
+            return None
+        return _flatten_hover_contents(contents)
+
     @property
     def is_started(self) -> bool:
         return self._subprocess is not None and self._subprocess.is_alive()
@@ -172,3 +190,19 @@ class LspServer:
         if self._client is None:
             raise RuntimeError("LspServer is not started; call start() first")
         return self._client
+
+
+def _flatten_hover_contents(contents: Any) -> str | None:
+    if isinstance(contents, str):
+        return contents or None
+    if isinstance(contents, dict):
+        value = contents.get("value")
+        return value if isinstance(value, str) and value else None
+    if isinstance(contents, list):
+        parts: list[str] = []
+        for item in contents:
+            flat = _flatten_hover_contents(item)
+            if flat:
+                parts.append(flat)
+        return "\n".join(parts) if parts else None
+    return None

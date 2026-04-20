@@ -62,6 +62,11 @@ class Edge(IR):
     line: int
     condition: str | None = None
     async_kind: AsyncKind | None = None  # None => sync call
+    # Type surface from ty hover, deduped per callee qname. Optional so
+    # older cached graphs still deserialize.
+    callee_signature: str | None = None
+    callee_return_type: str | None = None
+    callee_hover_markdown: str | None = None
 
 
 class BuiltinUnresolved(IR):

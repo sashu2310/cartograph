@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import bisect
+import re
 from collections.abc import Iterable
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -92,7 +93,8 @@ _BUILTIN_NAMES = frozenset(
 
 class TyResolver:
     name: str = "ty"
-    version: str = "0.0.31"
+    # Bumped to invalidate resolve caches predating `Edge.callee_signature`.
+    version: str = "0.0.31+ts1"
 
     def __init__(self, server: LspServer) -> None:
         self._server = server
@@ -140,6 +142,9 @@ async def _resolve_via_lsp(
         decorators_by_target = await _resolve_all_decorators(
             server, modules, function_index
         )
+
+        type_surface = await _resolve_all_type_surfaces(server, edges, functions)
+        edges = _apply_type_surface(edges, type_surface)
 
         return Ok(
             value=ResolvedGraph(
@@ -273,6 +278,145 @@ async def _resolve_one_decorator(
         kwargs=dec.kwargs,
         line=dec.line,
     )
+
+
+async def _resolve_all_type_surfaces(
+    server: LspServer,
+    edges: Iterable[Edge],
+    functions: dict[str, FunctionRef],
+) -> dict[str, tuple[str | None, str | None, str | None]]:
+    # Hover once per unique callee — O(|functions|), not O(|edges|).
+    unique_callees: set[str] = {edge.callee_qname for edge in edges}
+    tasks: list[asyncio.Task[tuple[str, str | None]]] = []
+    for qname in unique_callees:
+        ref = functions.get(qname)
+        if ref is None:
+            continue
+        tasks.append(
+            asyncio.create_task(_hover_one_callee(server, qname, ref))
+        )
+    if not tasks:
+        return {}
+    results = await asyncio.gather(*tasks)
+    surface: dict[str, tuple[str | None, str | None, str | None]] = {}
+    for qname, raw in results:
+        if raw is None:
+            continue
+        signature = _extract_signature_line(raw)
+        return_type = _extract_return_type(signature) if signature else None
+        surface[qname] = (signature, return_type, raw)
+    return surface
+
+
+async def _hover_one_callee(
+    server: LspServer, qname: str, ref: FunctionRef
+) -> tuple[str, str | None]:
+    # Type surface is metadata — LSP errors return None, never raise.
+    try:
+        uri = _path_to_uri(ref.source_path)
+    except (OSError, ValueError):
+        return qname, None
+    # IR lines are 1-based; LSP is 0-based.
+    lsp_line = max(ref.line_start - 1, 0)
+    lsp_char = _def_keyword_offset(ref)
+    try:
+        return qname, await server.hover(uri, line=lsp_line, character=lsp_char)
+    except (LspTimeoutError, LspError, LspClosedError):
+        return qname, None
+    except Exception as exc:
+        logfire.warn(
+            f"hover raised unexpected {type(exc).__name__}: {exc}",
+            callee=qname,
+        )
+        return qname, None
+
+
+def _def_keyword_offset(ref: FunctionRef) -> int:
+    # Land the cursor on the name — ty hovers the identifier under it.
+    try:
+        with ref.source_path.open("r", encoding="utf-8") as fh:
+            for i, text in enumerate(fh, start=1):
+                if i == ref.line_start:
+                    # Skip leading whitespace + the keyword.
+                    stripped = text.lstrip()
+                    indent = len(text) - len(stripped)
+                    for kw in ("async def ", "def ", "class "):
+                        if stripped.startswith(kw):
+                            return indent + len(kw)
+                    return indent
+                if i > ref.line_start:
+                    break
+    except OSError:
+        pass
+    return 0
+
+
+def _apply_type_surface(
+    edges: list[Edge],
+    surface: dict[str, tuple[str | None, str | None, str | None]],
+) -> list[Edge]:
+    if not surface:
+        return edges
+    updated: list[Edge] = []
+    for edge in edges:
+        entry = surface.get(edge.callee_qname)
+        if entry is None:
+            updated.append(edge)
+            continue
+        signature, return_type, raw = entry
+        updated.append(
+            edge.model_copy(
+                update={
+                    "callee_signature": signature,
+                    "callee_return_type": return_type,
+                    "callee_hover_markdown": raw,
+                }
+            )
+        )
+    return updated
+
+
+_CODE_FENCE_RE = re.compile(r"```(?:\w+)?\n(.*?)\n```", re.DOTALL)
+_DEF_LINE_RE = re.compile(r"^\s*(?:async\s+)?def\s+[^\n]+", re.MULTILINE)
+_CLASS_LINE_RE = re.compile(r"^\s*class\s+[^\n]+", re.MULTILINE)
+
+
+def _extract_signature_line(markdown: str) -> str | None:
+    # Scan fenced blocks first, fall back to raw markdown. Strip the trailing
+    # colon so the stored string reads `def foo(...) -> int`, not `... -> int:`.
+    haystacks: list[str] = [m.group(1) for m in _CODE_FENCE_RE.finditer(markdown)]
+    haystacks.append(markdown)
+    for hay in haystacks:
+        for pattern in (_DEF_LINE_RE, _CLASS_LINE_RE):
+            match = pattern.search(hay)
+            if match:
+                line = match.group(0).strip()
+                return line.rstrip(":")
+    return None
+
+
+def _extract_return_type(signature: str) -> str | None:
+    # Split on the `->` at paren-depth 0 so nested generics like
+    # `Callable[[int], int] -> X` parse correctly.
+    arrow_idx = _find_toplevel_arrow(signature)
+    if arrow_idx is None:
+        return None
+    return signature[arrow_idx + 2 :].strip() or None
+
+
+def _find_toplevel_arrow(signature: str) -> int | None:
+    depth = 0
+    i = 0
+    while i < len(signature) - 1:
+        ch = signature[i]
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif depth == 0 and ch == "-" and signature[i + 1] == ">":
+            return i
+        i += 1
+    return None
 
 
 async def _resolve_all_calls(
