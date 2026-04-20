@@ -190,6 +190,8 @@ def callees_markdown(graph: AnalyzedGraph, target_qname: str) -> str:
         lines.append(
             f"- line {edge.line}: `{edge.callee_qname}` → {loc}{async_tag}{cond}"
         )
+        if edge.callee_signature:
+            lines.append(f"    - signature: `{edge.callee_signature}`")
     return "\n".join(lines)
 
 

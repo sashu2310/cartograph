@@ -191,4 +191,6 @@ def _edge_json(edge: Edge, resolved: ResolvedGraph) -> dict[str, Any]:
         "is_cross_file": is_cross_file,
         "line": edge.line,
         "condition": edge.condition,
+        "callee_signature": edge.callee_signature,
+        "callee_return_type": edge.callee_return_type,
     }

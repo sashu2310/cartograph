@@ -138,11 +138,10 @@ def pretty_entry_line(ep, accent: str):
 
 
 def print_rich_tree(resolved, root_qname: str, *, depth: int) -> None:
-    """Rich-rendered call tree rooted at `root_qname`.
+    """Call tree rooted at `root_qname`.
 
-    Edge-kind coloring: async dispatches pink-dashed, cross-file purple,
-    conditional branches amber, sync calls gray. File:line metadata on
-    the leaf of each call.
+    Async dispatches render pink-dashed, cross-file edges purple,
+    conditional branches amber, sync calls gray.
     """
     from rich.console import Console
     from rich.tree import Tree
@@ -161,6 +160,8 @@ def _fill_tree(resolved, qname: str, depth: int, node, seen: set[str]) -> None:
     for edge in resolved.get_callees(qname):
         callee_ref = resolved.functions.get(edge.callee_qname)
         child = node.add(_tree_label(edge.callee_qname, callee_ref, edge=edge))
+        if edge.callee_signature:
+            child.add(f"[dim italic]signature:[/] [dim]{edge.callee_signature}[/]")
         if edge.callee_qname in seen:
             child.add("[dim yellow]↻ cycle[/]")
             continue
