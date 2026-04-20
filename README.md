@@ -222,11 +222,21 @@ ELK.js layout engine, draggable nodes, branch visualization on edges, condition 
 
 **Resolution ceiling:** ~65% of project-internal calls resolve on complex codebases. The remaining are calls to external packages (Django ORM, stdlib, sentry_sdk) that no project-level static analyzer can resolve. The entry point discovery doesn't depend on resolution — it's pure graph topology.
 
+### Blast Radius
+
+```bash
+cartograph blast /path/to/project                               # from git diff HEAD
+cartograph blast /path/to/project --file foo/bar.py             # explicit file(s)
+cartograph blast /path/to/project --function pkg.module.fn      # explicit function
+cartograph blast /path/to/project -d 5 --format markdown        # markdown for PR comments
+cartograph blast /path/to/project --format json -o blast.json   # machine-readable
+```
+
 ---
 
 ## Roadmap
 
-- **Blast radius** — `carto impact --diff HEAD~1` → which entry points does this PR affect
+- **Blast radius** — `cartograph blast` is now available (see Commands above)
 - **MCP server** — Cartograph as a tool for Claude Code / Cursor (no piping needed)
 - **Tree-sitter** → Java (Spring Boot), Go, TypeScript
 - **CI integration** — GitHub Action that comments blast radius on PRs

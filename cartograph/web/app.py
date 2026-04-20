@@ -3,9 +3,10 @@
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from cartograph.graph.call_graph import CallGraph
 from cartograph.graph.models import ProjectIndex
@@ -26,6 +27,12 @@ _entry_point_ids: set[str] = set()
 _llm_provider = None
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+class BlastRequest(BaseModel):
+    files: list[str] = Field(default_factory=list)
+    functions: list[str] = Field(default_factory=list)
+    depth: int = Field(default=10, ge=1, le=50)
 
 
 def create_app(
@@ -111,5 +118,34 @@ def create_app(
     @app.get("/api/llm-status")
     async def llm_status():
         return {"available": _llm_provider is not None}
+
+    @app.post("/api/blast")
+    async def post_blast(payload: BlastRequest) -> dict:
+        from cartograph.blast.analyzer import BlastAnalyzer, UnknownQnameError
+        from cartograph.web.serializers import serialize_blast
+
+        if not payload.files and not payload.functions:
+            raise HTTPException(
+                status_code=400,
+                detail="Must provide at least one of: files, functions",
+            )
+
+        analyzer = BlastAnalyzer(graph=_graph, index=_index)
+
+        try:
+            if payload.functions:
+                report = analyzer.analyze_functions(
+                    list(payload.functions), max_depth=payload.depth
+                )
+            else:
+                files = [Path(f) for f in payload.files]
+                report = analyzer.analyze_files(files, max_depth=payload.depth)
+        except UnknownQnameError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Unknown function qname: {exc.qname}",
+            ) from exc
+
+        return serialize_blast(report)
 
     return app

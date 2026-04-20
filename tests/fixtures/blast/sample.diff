@@ -1,0 +1,13 @@
+--- a/helper.py
++++ b/helper.py
+@@ -1,4 +1,5 @@
+ from sample_project.util import calc
+
++# changed
+ def work():
+     return calc()
+--- a/orphan.py
++++ b/orphan.py
+@@ -0,0 +1,3 @@
++def orphaned():
++    pass
