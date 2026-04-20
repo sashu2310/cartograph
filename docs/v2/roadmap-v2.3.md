@@ -69,5 +69,4 @@ Better to ship a substantial v2.3 and pause for real usage than ship v2.3-small 
 
 ## Status snapshot
 
-**13 of 22 items complete** (items 1–12 + the new #22 UI fix).
-Commits land one-per-item on the `v2` branch. See `git log origin/v2..v2` for the unpushed stack.
+**22 of 22 items complete.** Branch `v2` is release-candidate; ready to squash-merge into `main`.
