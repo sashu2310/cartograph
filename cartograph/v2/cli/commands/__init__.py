@@ -7,6 +7,7 @@ from cartograph.v2.cli.commands import (  # noqa: F401
     benchmark,
     callers,
     context,
+    coverage,
     dead,
     entries,
     explain,

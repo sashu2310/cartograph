@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from cartograph.v2.analyses._async_patterns import SyncInAsync, find_sync_in_async
 from cartograph.v2.analyses._chains import LongCallChain, find_long_call_chains
+from cartograph.v2.analyses._coverage import FunctionCoverage, find_coverage
 from cartograph.v2.analyses._cycles import ImportCycle, find_import_cycles
 from cartograph.v2.analyses._dead import DeadFunction, find_dead
 from cartograph.v2.analyses._impact import (
@@ -88,6 +89,9 @@ __all__ = [
     # dead
     "DeadFunction",
     "find_dead",
+    # coverage
+    "FunctionCoverage",
+    "find_coverage",
     # impact
     "CallSiteImpact",
     "ImportSiteImpact",
