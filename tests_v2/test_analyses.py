@@ -7,13 +7,24 @@ from pathlib import Path
 from cartograph.v2.analyses import (
     AnalysisReport,
     analyze,
+    diff_graphs,
     find_async_boundary_crossings,
     find_mixed_operations,
     find_model_hotspots,
     find_n_plus_one,
 )
-from cartograph.v2.ir.analyzed import AnalyzedGraph
-from cartograph.v2.ir.annotated import AnnotatedGraph, OrmOperationLabel
+from cartograph.v2.ir.analyzed import (
+    AnalyzedGraph,
+    ApiRouteEntry,
+    CeleryTaskEntry,
+    DiscoveredEntry,
+)
+from cartograph.v2.ir.annotated import (
+    AnnotatedGraph,
+    ApiRouteLabel,
+    CeleryTaskLabel,
+    OrmOperationLabel,
+)
 from cartograph.v2.ir.resolved import Edge, FunctionRef, ResolvedGraph
 
 
@@ -223,3 +234,179 @@ class TestAnalyzeBundle:
         assert (
             report.boundary_crossings and report.boundary_crossings[0].qname == "a.loop"
         )
+
+
+class TestGraphDiff:
+    def _with_entries(
+        self, functions, edges=(), labels=None, entries=()
+    ) -> AnalyzedGraph:
+        resolved = ResolvedGraph(functions=functions, edges=edges)
+        return AnalyzedGraph(
+            annotated=AnnotatedGraph(resolved=resolved, labels=labels or {}),
+            entry_points=entries,
+        )
+
+    def test_identical_graphs_produce_empty_diff(self):
+        g = self._with_entries(
+            functions={"a.f": _fn("a.f"), "a.g": _fn("a.g")},
+            edges=(Edge(caller_qname="a.f", callee_qname="a.g", line=1),),
+        )
+        diff = diff_graphs(g, g, from_sha="a" * 40, to_sha="b" * 40)
+        assert diff.is_empty
+        assert diff.added_edges == ()
+        assert diff.removed_edges == ()
+        assert diff.from_sha == "a" * 40
+        assert diff.to_sha == "b" * 40
+
+    def test_added_edge_shows_up_on_the_right_side(self):
+        from_g = self._with_entries(functions={"a.f": _fn("a.f"), "a.g": _fn("a.g")})
+        to_g = self._with_entries(
+            functions={"a.f": _fn("a.f"), "a.g": _fn("a.g")},
+            edges=(Edge(caller_qname="a.f", callee_qname="a.g", line=3),),
+        )
+        diff = diff_graphs(from_g, to_g, from_sha="x", to_sha="y")
+        assert len(diff.added_edges) == 1
+        assert diff.added_edges[0].caller_qname == "a.f"
+        assert diff.added_edges[0].callee_qname == "a.g"
+        assert diff.added_edges[0].line == 3
+        assert diff.removed_edges == ()
+
+    def test_removed_edge_shows_up_on_the_left_side(self):
+        from_g = self._with_entries(
+            functions={"a.f": _fn("a.f"), "a.g": _fn("a.g")},
+            edges=(Edge(caller_qname="a.f", callee_qname="a.g", line=5),),
+        )
+        to_g = self._with_entries(functions={"a.f": _fn("a.f"), "a.g": _fn("a.g")})
+        diff = diff_graphs(from_g, to_g, from_sha="x", to_sha="y")
+        assert len(diff.removed_edges) == 1
+        assert diff.removed_edges[0].line == 5
+        assert diff.added_edges == ()
+
+    def test_same_edge_different_async_kind_is_remove_plus_add(self):
+        # `foo()` → `foo.delay()` is a semantic change, so the diff renders
+        # it as remove+add rather than collapsing by (caller, callee, line).
+        base = {"a.f": _fn("a.f"), "a.g": _fn("a.g")}
+        from_g = self._with_entries(
+            functions=base,
+            edges=(Edge(caller_qname="a.f", callee_qname="a.g", line=2),),
+        )
+        to_g = self._with_entries(
+            functions=base,
+            edges=(
+                Edge(
+                    caller_qname="a.f",
+                    callee_qname="a.g",
+                    line=2,
+                    async_kind="celery_delay",
+                ),
+            ),
+        )
+        diff = diff_graphs(from_g, to_g, from_sha="x", to_sha="y")
+        assert len(diff.removed_edges) == 1
+        assert len(diff.added_edges) == 1
+        assert diff.removed_edges[0].async_kind is None
+        assert diff.added_edges[0].async_kind == "celery_delay"
+
+    def test_added_and_removed_functions(self):
+        from_g = self._with_entries(
+            functions={"a.keep": _fn("a.keep"), "a.gone": _fn("a.gone")},
+        )
+        to_g = self._with_entries(
+            functions={"a.keep": _fn("a.keep"), "a.fresh": _fn("a.fresh")},
+        )
+        diff = diff_graphs(from_g, to_g, from_sha="x", to_sha="y")
+        assert tuple(f.qname for f in diff.added_functions) == ("a.fresh",)
+        assert tuple(f.qname for f in diff.removed_functions) == ("a.gone",)
+
+    def test_entry_point_added_removed_and_kind_changed(self):
+        fns = {"a.hello": _fn("a.hello"), "a.task": _fn("a.task")}
+        from_g = self._with_entries(
+            functions=fns,
+            entries=(
+                ApiRouteEntry(qname="a.hello", method="GET", path="/hello"),
+                CeleryTaskEntry(qname="a.task"),
+            ),
+        )
+        to_g = self._with_entries(
+            functions={**fns, "a.newroute": _fn("a.newroute")},
+            entries=(
+                DiscoveredEntry(qname="a.hello", trigger_decorator="custom"),
+                ApiRouteEntry(qname="a.newroute", method="POST", path="/new"),
+            ),
+        )
+        diff = diff_graphs(from_g, to_g, from_sha="x", to_sha="y")
+        assert diff.added_entries == ("a.newroute",)
+        assert diff.removed_entries == ("a.task",)
+        assert len(diff.entry_kind_changes) == 1
+        kc = diff.entry_kind_changes[0]
+        assert kc.qname == "a.hello"
+        assert kc.from_kind == "api_route"
+        assert kc.to_kind == "discovered"
+
+    def test_label_diff_uses_full_json_payload(self):
+        # GET → POST on the same route surfaces as remove+add because labels
+        # are compared by full JSON, not just the discriminator.
+        fns = {"a.hello": _fn("a.hello")}
+        from_g = self._with_entries(
+            functions=fns,
+            labels={
+                "a.hello": (
+                    ApiRouteLabel(framework="fastapi", method="GET", path="/hello"),
+                )
+            },
+        )
+        to_g = self._with_entries(
+            functions=fns,
+            labels={
+                "a.hello": (
+                    ApiRouteLabel(framework="fastapi", method="POST", path="/hello"),
+                )
+            },
+        )
+        diff = diff_graphs(from_g, to_g, from_sha="x", to_sha="y")
+        assert len(diff.added_labels) == 1
+        assert len(diff.removed_labels) == 1
+        assert '"method":"GET"' in diff.removed_labels[0].label_json
+        assert '"method":"POST"' in diff.added_labels[0].label_json
+
+    def test_label_added_on_a_qname_that_had_none(self):
+        fns = {"a.hello": _fn("a.hello")}
+        from_g = self._with_entries(functions=fns, labels={})
+        to_g = self._with_entries(
+            functions=fns,
+            labels={"a.hello": (CeleryTaskLabel(queue="default"),)},
+        )
+        diff = diff_graphs(from_g, to_g, from_sha="x", to_sha="y")
+        assert len(diff.added_labels) == 1
+        assert diff.added_labels[0].label_kind == "celery_task"
+        assert diff.removed_labels == ()
+
+    def test_output_is_deterministic(self):
+        fns = {
+            "a.f": _fn("a.f"),
+            "a.g": _fn("a.g"),
+            "a.h": _fn("a.h"),
+        }
+        from_g = self._with_entries(
+            functions={"a.f": fns["a.f"], "a.g": fns["a.g"]},
+            edges=(Edge(caller_qname="a.f", callee_qname="a.g", line=1),),
+        )
+        to_g = self._with_entries(
+            functions={"a.f": fns["a.f"], "a.h": fns["a.h"]},
+            edges=(
+                Edge(caller_qname="a.f", callee_qname="a.h", line=4),
+                Edge(caller_qname="a.f", callee_qname="a.h", line=5),
+            ),
+        )
+        d1 = diff_graphs(from_g, to_g, from_sha="x", to_sha="y")
+        d2 = diff_graphs(from_g, to_g, from_sha="x", to_sha="y")
+        assert d1.model_dump_json() == d2.model_dump_json()
+
+    def test_is_empty_flag(self):
+        g = self._with_entries(functions={"a.f": _fn("a.f")})
+        d = diff_graphs(g, g, from_sha="x", to_sha="y")
+        assert d.is_empty is True
+
+        other = self._with_entries(functions={"a.f": _fn("a.f"), "a.new": _fn("a.new")})
+        d = diff_graphs(g, other, from_sha="x", to_sha="y")
+        assert d.is_empty is False

@@ -16,6 +16,14 @@ from cartograph.v2.analyses._chains import LongCallChain, find_long_call_chains
 from cartograph.v2.analyses._coverage import FunctionCoverage, find_coverage
 from cartograph.v2.analyses._cycles import ImportCycle, find_import_cycles
 from cartograph.v2.analyses._dead import DeadFunction, find_dead
+from cartograph.v2.analyses._diff import (
+    EdgeKey,
+    EntryPointDelta,
+    FunctionDelta,
+    GraphDiff,
+    LabelDelta,
+    diff_graphs,
+)
 from cartograph.v2.analyses._impact import (
     CallSiteImpact,
     ImportSiteImpact,
@@ -92,6 +100,13 @@ __all__ = [
     # coverage
     "FunctionCoverage",
     "find_coverage",
+    # diff
+    "EdgeKey",
+    "EntryPointDelta",
+    "FunctionDelta",
+    "GraphDiff",
+    "LabelDelta",
+    "diff_graphs",
     # impact
     "CallSiteImpact",
     "ImportSiteImpact",

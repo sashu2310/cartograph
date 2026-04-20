@@ -9,6 +9,7 @@ from cartograph.v2.cli.commands import (  # noqa: F401
     context,
     coverage,
     dead,
+    diff,
     entries,
     explain,
     impact,
