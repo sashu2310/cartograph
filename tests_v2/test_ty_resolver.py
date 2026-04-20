@@ -38,6 +38,9 @@ class FakeLspServer:
         self.responses: dict[tuple[str, int, int], list[dict] | Exception] = {}
         self.default_response: list[dict] | Exception = []
         self.definition_log: list[tuple[str, int, int]] = []
+        self.hover_responses: dict[str, str | Exception | None] = {}
+        self.default_hover: str | Exception | None = None
+        self.hover_log: list[tuple[str, int, int]] = []
 
     # ── LspServer-compatible surface ─────────────────────────────────
 
@@ -68,6 +71,13 @@ class FakeLspServer:
         if isinstance(resp, Exception):
             raise resp
         return list(resp)
+
+    async def hover(self, uri: str, line: int, character: int) -> str | None:
+        self.hover_log.append((uri, line, character))
+        resp = self.hover_responses.get(uri, self.default_hover)
+        if isinstance(resp, Exception):
+            raise resp
+        return resp
 
     async def shutdown(self) -> None:
         pass
@@ -291,6 +301,125 @@ class TestWithFakeServer:
         assert graph.functions["app.Foo.bar"].class_name == "Foo"
 
     @pytest.mark.asyncio
+    async def test_hover_populates_edge_type_surface(self, tmp_path):
+        src = tmp_path / "app.py"
+        src.write_text(
+            "def add(x: int, y: int) -> int:\n"
+            "    return x + y\n"
+            "\n"
+            "def driver():\n"
+            "    return add(1, 2)\n"
+        )
+        modules = _extract_modules(src, module_names=["app"])
+
+        fake = FakeLspServer()
+        fake.default_response = [_location(src, line_0=0)]
+        fake.default_hover = (
+            "```python\n"
+            "def add(x: int, y: int) -> int\n"
+            "```\n"
+            "\n"
+            "Sum of two integers."
+        )
+
+        resolver = TyResolver(server=fake)  # type: ignore[arg-type]
+        result = await resolver.resolve(modules, project_root=tmp_path)
+        assert is_ok(result)
+        graph = result.value
+
+        edge = next(e for e in graph.edges if e.caller_qname == "app.driver")
+        assert edge.callee_qname == "app.add"
+        assert edge.callee_signature == "def add(x: int, y: int) -> int"
+        assert edge.callee_return_type == "int"
+        assert edge.callee_hover_markdown is not None
+        assert "def add" in edge.callee_hover_markdown
+
+    @pytest.mark.asyncio
+    async def test_hover_is_deduped_per_callee(self, tmp_path):
+        # Guards against regression to per-edge hover (O(edges) round-trips).
+        src = tmp_path / "app.py"
+        src.write_text(
+            "def helper():\n"
+            "    return 1\n"
+            "\n"
+            "def driver_a():\n"
+            "    return helper()\n"
+            "\n"
+            "def driver_b():\n"
+            "    return helper()\n"
+        )
+        modules = _extract_modules(src, module_names=["app"])
+
+        fake = FakeLspServer()
+        fake.default_response = [_location(src, line_0=0)]
+        fake.default_hover = "```python\ndef helper() -> int\n```"
+
+        resolver = TyResolver(server=fake)  # type: ignore[arg-type]
+        result = await resolver.resolve(modules, project_root=tmp_path)
+        assert is_ok(result)
+
+        assert len(fake.hover_log) == 1
+        edges = [
+            e for e in result.value.edges if e.callee_qname == "app.helper"
+        ]
+        assert len(edges) == 2
+        assert all(e.callee_signature == "def helper() -> int" for e in edges)
+        assert all(e.callee_return_type == "int" for e in edges)
+
+    @pytest.mark.asyncio
+    async def test_hover_timeout_leaves_edge_unpopulated(self, tmp_path):
+        from cartograph.v2.stages.resolve.lsp.client import LspTimeoutError
+
+        src = tmp_path / "app.py"
+        src.write_text(
+            "def helper():\n"
+            "    return 1\n"
+            "\n"
+            "def driver():\n"
+            "    return helper()\n"
+        )
+        modules = _extract_modules(src, module_names=["app"])
+
+        fake = FakeLspServer()
+        fake.default_response = [_location(src, line_0=0)]
+        fake.default_hover = LspTimeoutError("hover timed out")
+
+        resolver = TyResolver(server=fake)  # type: ignore[arg-type]
+        result = await resolver.resolve(modules, project_root=tmp_path)
+        assert is_ok(result)
+
+        edge = next(e for e in result.value.edges if e.caller_qname == "app.driver")
+        assert edge.callee_qname == "app.helper"
+        assert edge.callee_signature is None
+        assert edge.callee_return_type is None
+        assert edge.callee_hover_markdown is None
+
+    @pytest.mark.asyncio
+    async def test_hover_empty_response_is_none(self, tmp_path):
+        src = tmp_path / "app.py"
+        src.write_text(
+            "def helper():\n"
+            "    return 1\n"
+            "\n"
+            "def driver():\n"
+            "    return helper()\n"
+        )
+        modules = _extract_modules(src, module_names=["app"])
+
+        fake = FakeLspServer()
+        fake.default_response = [_location(src, line_0=0)]
+        fake.default_hover = None
+
+        resolver = TyResolver(server=fake)  # type: ignore[arg-type]
+        result = await resolver.resolve(modules, project_root=tmp_path)
+        assert is_ok(result)
+
+        edge = next(e for e in result.value.edges if e.caller_qname == "app.driver")
+        assert edge.callee_signature is None
+        assert edge.callee_return_type is None
+        assert edge.callee_hover_markdown is None
+
+    @pytest.mark.asyncio
     async def test_constructor_call_resolves_to_class(self, tmp_path):
         src = tmp_path / "app.py"
         src.write_text(
@@ -366,4 +495,43 @@ class TestWithRealTy:
         assert any(e.callee_qname == "app.helper" for e in driver_callees), (
             f"expected driver → helper edge; got {driver_callees}, "
             f"unresolved={graph.unresolved}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_hover_attaches_return_type_to_edge(self, ty_available, tmp_path):
+        # Signature string is ty-version-dependent; assert on substring `int`.
+        src = tmp_path / "app.py"
+        src.write_text(
+            '"""Typed intra-module call."""\n'
+            "\n"
+            "def add(x: int, y: int) -> int:\n"
+            "    return x + y\n"
+            "\n"
+            "def driver():\n"
+            "    return add(1, 2)\n"
+        )
+        modules = _extract_modules(src, module_names=["app"])
+
+        async with LspServer(["ty", "server"]) as server:
+            resolver = TyResolver(server=server)
+            result = await resolver.resolve(modules, project_root=tmp_path)
+
+        assert is_ok(result), f"resolver returned Err: {result}"
+        graph = result.value
+        driver_callees = graph.get_callees("app.driver")
+        add_edges = [e for e in driver_callees if e.callee_qname == "app.add"]
+        assert add_edges, (
+            f"expected driver → add edge; got {driver_callees}, "
+            f"unresolved={graph.unresolved}"
+        )
+        edge = add_edges[0]
+        # Either the clean-parse field or the raw markdown must carry it.
+        haystack = " ".join(
+            part or "" for part in (edge.callee_return_type, edge.callee_hover_markdown)
+        )
+        assert "int" in haystack, (
+            f"expected 'int' in callee type surface; got "
+            f"signature={edge.callee_signature!r}, "
+            f"return_type={edge.callee_return_type!r}, "
+            f"raw={edge.callee_hover_markdown!r}"
         )

@@ -11,6 +11,7 @@ Speaks just enough LSP to exercise the client stack:
 Config via env vars (for tests to control behavior):
   MOCK_LSP_DEFINITION_URI   — URI to return as the definition target
   MOCK_LSP_DEFINITION_LINE  — line (int) in that URI
+  MOCK_LSP_HOVER_MARKDOWN   — markdown value to return from hover (empty → null contents)
   MOCK_LSP_DELAY_MS         — inject latency on every request (int, ms)
   MOCK_LSP_NEVER_RESPOND    — "1" to drop responses (timeout test)
   MOCK_LSP_ERROR_ON         — method name to return an LSP error for
@@ -59,6 +60,7 @@ def main() -> int:
     error_on = os.environ.get("MOCK_LSP_ERROR_ON", "")
     def_uri = os.environ.get("MOCK_LSP_DEFINITION_URI", "file:///tmp/mock_target.py")
     def_line = int(os.environ.get("MOCK_LSP_DEFINITION_LINE", "0"))
+    hover_markdown = os.environ.get("MOCK_LSP_HOVER_MARKDOWN", "")
 
     while True:
         msg = _read_message()
@@ -122,6 +124,24 @@ def main() -> int:
                     },
                 }
             )
+            continue
+
+        if method == "textDocument/hover":
+            if hover_markdown:
+                _send(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": msg_id,
+                        "result": {
+                            "contents": {
+                                "kind": "markdown",
+                                "value": hover_markdown,
+                            }
+                        },
+                    }
+                )
+            else:
+                _send({"jsonrpc": "2.0", "id": msg_id, "result": None})
             continue
 
         # Unknown request — echo a null result.

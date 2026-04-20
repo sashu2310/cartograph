@@ -113,6 +113,32 @@ class TestDefinition:
         assert all(len(r) == 1 for r in results)
 
 
+class TestHover:
+    @pytest.mark.asyncio
+    async def test_hover_returns_markdown_value(self, monkeypatch):
+        monkeypatch.setenv(
+            "MOCK_LSP_HOVER_MARKDOWN",
+            "```python\ndef foo() -> int\n```",
+        )
+        async with LspServer(_mock_cmd()) as server:
+            await server.initialize(root_uri="file:///tmp/proj")
+            markdown = await server.hover(
+                "file:///tmp/proj/foo.py", line=0, character=0
+            )
+        assert markdown is not None
+        assert "def foo() -> int" in markdown
+
+    @pytest.mark.asyncio
+    async def test_hover_returns_none_when_server_has_no_answer(self):
+        async with LspServer(_mock_cmd()) as server:
+            await server.initialize(root_uri="file:///tmp/proj")
+            markdown = await server.hover(
+                "file:///tmp/proj/foo.py", line=0, character=0
+            )
+        # MOCK_LSP_HOVER_MARKDOWN is unset → server returns {"result": None}.
+        assert markdown is None
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Error paths
 # ──────────────────────────────────────────────────────────────────────────────
