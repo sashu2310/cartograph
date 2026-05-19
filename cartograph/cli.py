@@ -1035,5 +1035,155 @@ def _build_flow_context(index, graph, function_name: str, depth: int) -> str:
     return "\n".join(lines)
 
 
+@main.command()
+@click.argument("path", type=click.Path(exists=True, file_okay=False))
+@click.option(
+    "--diff",
+    "diff_path",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Path to unified diff file; defaults to `git diff HEAD` in <path>.",
+)
+@click.option(
+    "--file",
+    "files",
+    multiple=True,
+    help="Explicit file(s) relative to <path>. Overrides --diff.",
+)
+@click.option(
+    "--function",
+    "functions",
+    multiple=True,
+    help="Explicit function qname(s). Overrides --diff and --file.",
+)
+@click.option(
+    "-d",
+    "--depth",
+    default=10,
+    show_default=True,
+    type=click.IntRange(1, 50),
+)
+@click.option(
+    "-f",
+    "--format",
+    "output_format",
+    type=click.Choice(["terminal", "markdown", "json"]),
+    default="terminal",
+    show_default=True,
+)
+@click.option(
+    "-o",
+    "--output",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help="Write output to file instead of stdout.",
+)
+@click.option(
+    "--test-dir",
+    default="tests",
+    show_default=True,
+    help="Directory containing pytest tests relative to <path>.",
+)
+def blast(
+    path: str,
+    diff_path: str | None,
+    files: tuple[str, ...],
+    functions: tuple[str, ...],
+    depth: int,
+    output_format: str,
+    output: str | None,
+    test_dir: str,
+) -> None:
+    """Compute blast radius — show every function, entry point, and test affected by changes."""
+    import sys
+
+    from cartograph.blast.analyzer import BlastAnalyzer, UnknownQnameError
+    from cartograph.blast.diff import git_diff_head, parse_changed_files
+    from cartograph.blast.renderer import render_json, render_markdown, render_terminal
+    from cartograph.blast.tests_index import build_test_index
+
+    config = CartographConfig(root_path=path, include_tests=True)
+    index, graph = parse_and_build(config, use_cache=True)
+
+    # Build test index (silent skip if default test_dir missing; warn if explicit)
+    test_dir_path = Path(path) / test_dir
+    if test_dir_path.exists():
+        test_index = build_test_index(index, test_dir_path)
+    else:
+        ctx = click.get_current_context()
+        source = ctx.get_parameter_source("test_dir")
+        if source == click.core.ParameterSource.COMMANDLINE:
+            click.echo(
+                f"test dir not found: {test_dir_path} (skipping test mapping)",
+                err=True,
+            )
+        test_index = None
+
+    analyzer = BlastAnalyzer(graph=graph, index=index, test_index=test_index)
+
+    try:
+        if functions:
+            report = analyzer.analyze_functions(list(functions), max_depth=depth)
+        elif files:
+            changed_paths = [Path(path) / f for f in files]
+            report = analyzer.analyze_files(changed_paths, max_depth=depth)
+        else:
+            # Default: git diff HEAD (or explicit diff file)
+            if diff_path:
+                diff_text = Path(diff_path).read_text(encoding="utf-8")
+            else:
+                try:
+                    diff_text = git_diff_head(Path(path))
+                except Exception as exc:
+                    stderr_msg = str(exc)
+                    click.echo(f"git diff failed: {stderr_msg}", err=True)
+                    sys.exit(5)
+
+            changed_paths = parse_changed_files(diff_text, Path(path))
+            if not changed_paths:
+                click.echo("no changes to analyze", err=True)
+                sys.exit(2)
+            report = analyzer.analyze_files(changed_paths, max_depth=depth)
+
+    except UnknownQnameError as exc:
+        click.echo(f"unknown function: {exc.qname}", err=True)
+        sys.exit(3)
+
+    # Check for empty result after analysis
+    if (
+        not report.changed_functions
+        and not report.affected_functions
+        and not report.changed_files
+    ):
+        click.echo("no changes to analyze", err=True)
+        sys.exit(2)
+
+    # Render output
+    if output_format == "json":
+        rendered = render_json(report)
+    elif output_format == "markdown":
+        rendered = render_markdown(report)
+    else:
+        # terminal — write to a string buffer then echo
+        from io import StringIO
+
+        from rich.console import Console as RichConsole
+
+        if output:
+            buf = StringIO()
+            rich_console = RichConsole(file=buf, highlight=False)
+            render_terminal(report, rich_console)
+            rendered = buf.getvalue()
+        else:
+            render_terminal(report, console)
+            rendered = None
+
+    if rendered is not None:
+        if output:
+            Path(output).write_text(rendered, encoding="utf-8")
+        else:
+            click.echo(rendered, nl=False)
+
+
 if __name__ == "__main__":
     main()

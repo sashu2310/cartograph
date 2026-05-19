@@ -170,3 +170,49 @@ def serialize_search(graph: CallGraph, query: str, limit: int = 20) -> dict:
                 break
 
     return {"query": query, "results": results}
+
+
+def serialize_blast(report: "BlastRadiusReport") -> dict:  # noqa: F821
+    """Serialize a BlastRadiusReport to a JSON-compatible dict (Section 6 schema)."""
+    from cartograph.blast.models import BlastRadiusReport  # noqa: F401 (type check)
+
+    return {
+        "input_kind": report.input_kind.value,
+        "changed_files": report.changed_files,
+        "changed_functions": report.changed_functions,
+        "affected_functions": [
+            {
+                "qualified_name": f.qualified_name,
+                "module": f.module,
+                "severity": f.severity.value,
+                "depth": f.depth,
+                "path_from_change": f.path_from_change,
+            }
+            for f in report.affected_functions
+        ],
+        "affected_entry_points": [
+            {
+                "qualified_name": ep.qualified_name,
+                "entry_point_type": ep.entry_point_type,
+                "trigger": ep.trigger,
+                "reached_via": ep.reached_via,
+            }
+            for ep in report.affected_entry_points
+        ],
+        "affected_tests": [
+            {
+                "test_qualified_name": t.test_qualified_name,
+                "test_file": t.test_file,
+                "covers": t.covers,
+            }
+            for t in report.affected_tests
+        ],
+        "stats": {
+            "total_changed_functions": report.stats.total_changed_functions,
+            "total_downstream": report.stats.total_downstream,
+            "total_upstream": report.stats.total_upstream,
+            "total_entry_points_hit": report.stats.total_entry_points_hit,
+            "total_tests_affected": report.stats.total_tests_affected,
+            "max_depth": report.stats.max_depth,
+        },
+    }
